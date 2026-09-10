@@ -35,7 +35,8 @@ jobs:
 
   claude-analysis:
     # Never expose review credentials to fork PRs or use pull_request_target.
-    if: always() && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    # Review failed tests too, but let a newer push cancel this expensive job.
+    if: ${{ !cancelled() && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     needs: repository-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30

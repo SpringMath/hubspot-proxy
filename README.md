@@ -45,7 +45,7 @@ Generate a broker token into a **new protected file outside the repo**:
 (umask 077; set -C; node scripts/generate-token.js > /secure/path/broker-token.json)
 ```
 
-Give the raw broker token to SpringMath through a secret manager. In a separate permissions-`0600` file, `/secure/path/hubspot-proxy.env`, store:
+From the generated JSON, give `brokerToken` to SpringMath through a secret manager and copy `BROKER_TOKEN_SHA256` into the broker’s env file. See [credential provisioning](docs/deployment.md#2-provision-credentials-privately). In a separate permissions-`0600` file, `/secure/path/hubspot-proxy.env`, store:
 
 ```dotenv
 HUBSPOT_ACCESS_TOKEN=<Ochre HubSpot service key>

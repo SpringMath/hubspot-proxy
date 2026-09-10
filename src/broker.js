@@ -1,4 +1,8 @@
 // This is an allowlisted adapter. Never turn `url` or request headers into an upstream destination.
+import { BrokerError } from './errors.js'
+import { createReplies } from './replies.js'
+import { createSendReservations } from './send-reservations.js'
+export { BrokerError } from './errors.js'
 const ORIGIN = 'https://api.hubapi.com'
 const TICKETS = '/crm/v3/objects/tickets'
 const CONTACTS = '/crm/v3/objects/contacts'
@@ -11,9 +15,6 @@ const validId = value => typeof value === 'string' && ID.test(value)
 const EXTERNAL_ID = /^[a-zA-Z0-9_-]{8,160}$/
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
-export class BrokerError extends Error {
-  constructor(status, code) { super(code); this.status = status; this.code = code }
-}
 const fail = (status, code) => { throw new BrokerError(status, code) }
 const invalid = () => fail(400, 'INVALID_REQUEST')
 const missing = () => fail(404, 'NOT_FOUND')
@@ -39,6 +40,7 @@ function integer(value, fallback, min, max) {
 }
 
 export function createBroker(config, { fetchImpl = fetch } = {}) {
+  const reservations = config.repliesEnabled ? createSendReservations(config.sendReservationDir) : undefined
   const transferredBytes = new WeakMap()
   const boundary = ['hs_pipeline', config.scopeProperty]
   const allowed = config.readProperties
@@ -62,7 +64,8 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     return result
   }
   async function upstream(path, { method = 'GET', body, signal, allow404 = false, expectedStatus } = {}) {
-    const isMutation = ['PATCH', 'DELETE'].includes(method) || (method === 'POST' && [TICKETS, CONTACTS, NOTES].includes(path))
+    const isMutation = ['PATCH', 'DELETE'].includes(method) || (method === 'POST'
+      && ([TICKETS, CONTACTS, NOTES].includes(path) || /^\/conversations\/v3\/conversations\/threads\/[0-9]{1,30}\/messages$/.test(path)))
     // `path` is built only from constants and individually validated/encoded values below.
     if (!path.startsWith('/') || path.startsWith('//') || /[\r\n\\]/.test(path)) malformed()
     let response
@@ -494,6 +497,12 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
       if (method === 'GET') kind = 'notes-list'
       else if (method === 'POST') kind = 'notes-create'
     }
+    else if (/^\/springmath\/v1\/tickets\/[0-9]{1,30}\/reply-context$/.test(path) && config.repliesEnabled && method === 'GET') {
+      id = path.split('/')[4]; kind = 'reply-context'
+    }
+    else if (/^\/springmath\/v1\/tickets\/[0-9]{1,30}\/replies$/.test(path) && config.repliesEnabled && method === 'POST') {
+      id = path.split('/')[4]; kind = 'reply-send'
+    }
     else if (path.startsWith(`${TICKETS}/`) && !path.slice(TICKETS.length + 1).includes('/')) {
       try { id = decodeURIComponent(path.slice(TICKETS.length + 1)) } catch { invalid() }
       const lookup = query.get('idProperty') === config.conversationProperty
@@ -509,7 +518,7 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
   }
   async function handle({ method, url, body }) {
     const { kind, id, query } = parseRoute(method, url)
-    if (!['create', 'update', 'search', 'notes-create'].includes(kind) && body !== undefined) invalid()
+    if (!['create', 'update', 'search', 'notes-create', 'reply-send'].includes(kind) && body !== undefined) invalid()
     const signal = AbortSignal.timeout(config.operationTimeoutMs)
     await account(signal)
     if (kind === 'account') return { status: 200, body: { portalId: Number(config.accountId) } }
@@ -521,6 +530,8 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     if (kind === 'archive') { await archive(id, signal); return { status: 204 } }
     if (kind === 'notes-list') return { status: 200, body: await listNotes(id, signal) }
     if (kind === 'notes-create') return { status: 201, body: await createNote(id, body, signal) }
+    if (kind === 'reply-context') return { status: 200, body: await replies.context(id, signal) }
+    if (kind === 'reply-send') { writeAllowed(); return { status: 201, body: await replies.send(id, body, signal) } }
     const idProperty = query.get('idProperty') || undefined
     if (idProperty && idProperty !== config.conversationProperty) invalid()
     if (query.has('archived') && !['true', 'false'].includes(query.get('archived'))) invalid()
@@ -532,5 +543,9 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     if (verify) await requesterVerified(row, signal)
     return { status: 200, body: { ...project(row, props), ...(verify ? { broker: { requesterAssociated: true } } : {}) } }
   }
-  return { handle, ready: () => account(AbortSignal.timeout(config.upstreamTimeoutMs)) }
+  const replies = createReplies(config, { upstream, readTicket, reservations })
+  return { handle, ready: async () => {
+    if (reservations) await reservations.ready()
+    return account(AbortSignal.timeout(config.upstreamTimeoutMs))
+  } }
 }

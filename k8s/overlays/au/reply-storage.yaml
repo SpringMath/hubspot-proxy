@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hubspot-proxy
+  namespace: hubspot-proxy-demo
+spec:
+  # One EBS-backed replica; never start an overlapping writer during rollout.
+  replicas: 1
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  template:
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: reply-reservations
+          persistentVolumeClaim:
+            claimName: hubspot-proxy-reply-reservations
+      containers:
+        - name: broker
+          volumeMounts:
+            - name: reply-reservations
+              mountPath: /data

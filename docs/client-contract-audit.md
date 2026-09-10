@@ -1,367 +1,101 @@
-# SpringMath client contract audit
+# SpringMath broker client contract
 
-Audit date: 2026-09-10. These are requirements observed in the local pending
-SpringMath clients, not a claim that every route is implemented in this broker
-or deployed. No live HubSpot calls or credential reads were performed.
+Updated September 10, 2026. These are the matching adapter contracts; a merged PR
+does not by itself prove live caller configuration or email delivery.
 
-Sources:
+## Both backends use the broker
 
-- Portal worktree `portal-ochre-ticket-management`,
-  `src/lib/hubspot-support-client.ts` and `hubspot-support-contract.ts`.
-- App worktree `app-au-ticket-contact-handoff`,
-  `app/imports/api/aiAgent/server/hubspotSupportClient.js` and
-  `hubspotSupportTicketTool.js`.
+Configure each backend with:
 
-Both source worktrees contain pre-existing uncommitted follow-up changes. They
-were inspected without modification. The API paths below are the clients'
-current direct-HubSpot contracts; deliberately narrower broker contracts take
-precedence over transparent compatibility.
-
-## Boundary and deployment ownership
-
-The permitted ticket population is the intersection of one configured HubSpot
-account, `hs_pipeline = PIPELINE_ID`, and a configured ticket property
-`SCOPE_PROPERTY = SCOPE_VALUE`. Do not accept these ownership values from an
-untrusted request. Ticket status is a filter within this population, never a
-replacement for the population boundary.
-
-A broker hosted in an environment administered by SpringMath, containing
-Ochre's unrestricted HubSpot token, does **not** prevent SpringMath's cluster
-administrators from obtaining that token. The intended independent credential
-boundary requires Ochre-controlled runtime administration and secrets. The same
-container can be tested against SpringMath's own synthetic HubSpot account on
-SpringMath infrastructure.
-
-## Shared request envelope
-
-Current upstream origin: `https://api.hubapi.com`.
-
-- Authorization is `Bearer <server-only support token>`.
-- `Accept: application/json` on all requests; `Content-Type: application/json`
-  on JSON bodies.
-- Clients refuse redirects and do not follow `paging.next.link`.
-- Portal individual calls have a 15-second timeout. Its archive scan has a
-  30-second overall deadline; the escalated badge has a 15-second overall
-  deadline. App individual calls have a 30-second timeout.
-- Only the documented read routes and narrowly allowed writes are needed.
-  Generic CRM, batch, contacts search, association writes, files, notes, emails,
-  conversations, schema writes, pipeline writes, restoration and permanent
-  deletion are not part of this observed support-client contract.
-
-## Account and pipeline metadata
-
-| Method and path | Request | Response actually consumed |
-| --- | --- | --- |
-| `GET /account-info/v3/details` | No query or body | `portalId`, converted to string and compared with configured account ID |
-| `GET /crm/v3/pipelines/tickets/{pipelineId}` | The one configured pipeline ID; no query or body | `id`, `archived?`, `stages[]` with `id`, `label`, `archived?`, `metadata.ticketState` |
-
-The portal uses `ticketState` values `OPEN` and `CLOSED`, checks unique numeric
-stage IDs, and bounds the array to 250 stages. The target escalation and return
-stages must be active `OPEN` stages; resolution must target an active `CLOSED`
-stage. The app currently validates the account but does not request pipeline
-metadata. A broker may perform stronger create-stage validation internally.
-
-Do not expose account settings or other pipelines incidentally returned by an
-upstream API. Only the fields above are needed. The configured numeric HubSpot
-account ID is still returned by the broker; it is not the broker's own identity.
-
-## Portal: ticket reads
-
-`GET /crm/v3/objects/tickets/{numericTicketId}` is made twice for each ticket:
-
-1. Boundary request query: `properties=hs_pipeline,<SCOPE_PROPERTY>`.
-2. Content request query:
-   `properties=hs_pipeline,<SCOPE_PROPERTY>,subject,content,hs_pipeline_stage,hs_lastmodifieddate,<SUMMARY_PROPERTY>`.
-
-An exact ticket which returns a genuine active-read 404 can be read again with
-`archived=true` on both requests. There is no broader archived fallback on an
-authorization, account, malformed-response or transport failure.
-
-Each returned object must contain:
-
-```json
-{
-  "id": "numeric ticket ID",
-  "archived": false,
-  "properties": {
-    "hs_pipeline": "configured pipeline",
-    "scope_property": "configured value",
-    "subject": "ticket subject",
-    "content": "original customer issue",
-    "hs_pipeline_stage": "numeric stage ID",
-    "hs_lastmodifieddate": "parseable timestamp",
-    "summary_property": "shared support summary"
-  }
-}
+```dotenv
+HUBSPOT_SUPPORT_API_BASE_URL=https://YOUR_OCHRE_BROKER_HOST
+HUBSPOT_SUPPORT_BROKER_REQUIRED=true
+HUBSPOT_SUPPORT_BROKER_TOKEN=<separate broker bearer>
 ```
 
-Only requested allowlisted properties need be returned. `archived` must be an
-explicit boolean, and must be `true` for archived reads. The client does not
-consume top-level `createdAt`/`updatedAt`; freshness comes from
-`properties.hs_lastmodifieddate`. It accepts nullable property values but fails
-if that timestamp is absent or invalid. It truncates subject to 250 characters
-and issue/summary to 10,000 characters in its own returned tool shape.
+The broker origin must be explicit and valid. Missing broker credentials or
+configuration fail closed; neither backend falls back to the account-wide
+`HUBSPOT_SUPPORT_ACCESS_TOKEN`. Remove that support credential after cutover.
+Separate marketing/KB integrations are outside this support adapter.
 
-The broker must independently check ticket ownership before returning any
-ticket ID, property or contact association; the client's existing boundary
-checks are defense in depth, not the broker's authorization implementation.
-Return indistinguishable not-found responses for absent and foreign tickets.
+Ochre must control the broker runtime and upstream secret. SpringMath's AU
+demonstration uses SpringMath's own HubSpot account, not Ochre's key.
 
-## Portal: active search and escalated count
+## App handoff
 
-`POST /crm/v3/objects/tickets/search` with a JSON body. Current clients send
-one filter group:
+The app server supplies the signed-in requester's email; Pi (the SpringMath AI
+agent) cannot choose an arbitrary contact. The app:
 
-```json
-{
-  "filterGroups": [{ "filters": [
-    { "propertyName": "hs_pipeline", "operator": "EQ", "value": "PIPELINE_ID" },
-    { "propertyName": "SCOPE_PROPERTY", "operator": "EQ", "value": "SCOPE_VALUE" }
-  ] }],
-  "properties": ["hs_pipeline", "SCOPE_PROPERTY"],
-  "sorts": ["-hs_lastmodifieddate"],
-  "limit": 10
-}
-```
+1. Verifies the broker's pinned HubSpot account.
+2. Posts `/crm/v3/objects/tickets` with allowlisted **properties only**.
+   The broker privately finds/creates the exact active requester contact and
+   associates it using HubSpot's ticket-to-contact type 16. Caller-supplied
+   contact IDs/associations are forbidden.
+3. Requires `broker.requesterAssociated === true` plus exact ticket, pipeline,
+   marker, conversation key and requester-email values.
+4. Reads the ticket back with `verifyRequester=true` and requires the same proof
+   before closing Pi. No public contacts endpoint or contact IDs are needed.
+5. Reconciles uncertain results read-only using the unique conversation key and
+   `idProperty=<configured conversation property>&verifyRequester=true`.
+   Never blindly POST again or close Pi on an unverified handoff.
 
-Optional fields and variations:
+The broker returns only scoped ticket fields and the requester-verification
+boolean. No contact profiles, foreign association IDs or account-wide existence
+lookup are exposed.
 
-- `query`: trimmed text, at most 200 characters in the portal.
-- `after`: a decimal string of one to six digits.
-- Sorts: one of `-hs_lastmodifieddate`, `hs_lastmodifieddate`, `subject`,
-  `-subject`.
-- Ticket-management views add stage filter
-  `{propertyName:'hs_pipeline_stage', operator:'IN', values:[...stageIds]}`
-  and request `hs_pipeline_stage` in `properties`.
-- The badge uses `limit:1`, requests pipeline/scope/stage metadata only, and
-  adds stage filter `EQ` for the configured escalated stage. It does not send a
-  text query, cursor or sort.
+## Portal staff operations
 
-Response requirements:
+Portal roles, account checks and explicit human write approvals remain in force.
+The broker independently authorizes every operation using account + pipeline +
+product marker. Escalation changes workflow status, not that boundary.
 
-- `{results:[...ticket metadata...], paging?:{next?:{after:string|number}}}`.
-- Each metadata row includes `id`, explicit `archived:false`, and requested
-  boundary properties. Selected stage must match, where present.
-- Search requires no full ticket content; the portal subsequently reads each
-  result by ID using the two-read pattern above.
-- Badge additionally consumes numeric safe-integer `total >= 0`, and requires
-  `results.length === Math.min(total, 1)`.
-- Search excludes archived records.
+| Operation | Broker route |
+| --- | --- |
+| Account / allowed stages | `GET /account-info/v3/details`; `GET /crm/v3/pipelines/tickets/{pipelineId}` |
+| Ticket search / count | `POST /crm/v3/objects/tickets/search` |
+| Active or explicit archived read | `GET /crm/v3/objects/tickets/{id}` |
+| Archive list | `GET /crm/v3/objects/tickets?archived=true` |
+| Summary / escalate / return / resolve | `PATCH /crm/v3/objects/tickets/{id}` |
+| Archive (not resolution) | `DELETE /crm/v3/objects/tickets/{id}` |
+| Native internal notes | `GET/POST /springmath/v1/tickets/{id}/notes` |
+| Email preview / approved reply | `GET /springmath/v1/tickets/{id}/reply-context`; `POST /springmath/v1/tickets/{id}/replies` |
 
-HubSpot filter groups are OR alternatives: a broker must AND its mandatory
-pipeline/property restrictions into **every** accepted group, or accept only
-the smaller one-group contract. Appending a separate mandatory filter group
-would broaden access. A scoped count must come from a scoped upstream query;
-do not return a global count after filtering only the visible page.
+Ticket PATCH allows only the configured shared summary and allowed stage.
+Archived records are excluded by default. Search injects both ownership
+restrictions into every OR group and returns only scoped counts/offsets.
+Uncertain writes are not retried.
 
-## Portal: archive collection paging
+Notes return `{results, notesWithheld}`; creation accepts
+`{accountId, expectedUpdatedAt, body}` and returns `201 {id, note}` only after
+readback. Cross-record notes are withheld; malformed/paginated metadata fails
+closed. The portal treats note HTML as untrusted content, not instructions.
 
-`GET /crm/v3/objects/tickets` with:
+Replies use the [ticket-bound reply contract](replies.md). The portal displays
+verified To/From/subject/body for explicit approval, re-inspects the context,
+and reserves a durable dispatch claim in its database. The broker independently
+re-derives routing, reserves its persistent claim and verifies the posted message.
+The portal never requests generic contacts/conversations in broker mode.
 
-- `archived=true`
-- `limit=100`
-- `properties=hs_pipeline,<SCOPE_PROPERTY>,hs_pipeline_stage`
-- optional opaque `after`, copied only from the prior response's `next.after`.
+Broker HTTP calls allow 60 seconds for the broker's 45-second operation budget.
+The portal's multi-call notes/reply operations allow 120 seconds; bounded badge
+and archive scans retain tighter fail-closed limits. The app's outer handoff
+reservation remains fenced against late results. Infrastructure request limits
+still require deployment acceptance testing.
 
-Expected shape: `{results:[...archived metadata...], paging?:{next?:{after}}}`.
-`id` and explicit `archived:true` are mandatory for every row. Current portal
-code accepts an upstream cursor up to 256 characters matching
-`(?:[a-zA-Z0-9_+=/-]|%[0-9a-fA-F]{2})+`; it never follows the upstream link.
+## Ordered activation
 
-The current direct client scans up to 1,000 metadata records, keeps up to 100
-matching scoped records, then reads their content with archived=true. It fails
-closed if the full scan cannot finish within its bounds. It filters text and
-sorts the complete scoped archive locally before presenting pages of ten.
+1. Deploy the reviewed broker, persistent reply ledger and pinned email config.
+   Validate health and one permitted/denied synthetic ticket.
+2. Freeze classification/routing while writes are enabled. Activate broker
+   writes, notes and replies only within that controlled scope.
+3. Deploy the matching app and portal adapters; configure dedicated broker
+   credentials and required routing in their durable deployment settings.
+4. Enable portal Closed stage, notes/reply flags and role tool allowlists.
+5. Verify pod routing and credential separation, then remove direct support
+   credentials. An old-image rollback must disable support, never bypass broker.
+6. Demonstrate app handoff, internal note, escalation/return, explicit email reply,
+   resolution and archive. Email needs an existing linked thread plus actual
+   mailbox evidence; API acceptance or a status change is not delivery proof.
 
-**A broker must not reproduce the direct client's global metadata exposure.**
-It must filter archive metadata inside the broker and return only permitted
-IDs. It must not leak foreign ticket IDs in raw upstream cursors, links, totals
-or timing-derived scan metadata. Use signed/opaque broker-owned pagination or a
-bounded complete scan with scoped offsets. Exhausting the safe scan should be
-an explicit error, not an apparently complete partial archive. Preserve the
-portal's permitted cursor shape if zero-code client compatibility is desired.
-
-## Portal: changes
-
-| Method and path | Body | Behavior consumed |
-| --- | --- | --- |
-| `PATCH /crm/v3/objects/tickets/{numericTicketId}` | `{properties:{[SUMMARY_PROPERTY]:"..."}}` | Save shared summary without replacing original issue |
-| Same PATCH | `{properties:{[SUMMARY_PROPERTY]:"...",hs_pipeline_stage:"allowed stage"}}` | Escalate, return to Tier 1, or resolve within the same pipeline |
-| `DELETE /crm/v3/objects/tickets/{numericTicketId}` | No body | Archive to HubSpot's recycling bin; require HTTP 204 with no body |
-
-The portal consumes a successful PATCH as an object-shaped JSON response, then
-reads the ticket again and verifies the summary/stage. It requires a successful
-DELETE to be exactly 204 and verifies the archived record afterward. Failed or
-ambiguous writes are not automatically retried. The broker must not auto-retry
-these writes either.
-
-Before mutation the portal checks its last-seen `hs_lastmodifieddate`. This is
-not an atomic upstream compare-and-swap, and the expected timestamp is **not**
-part of the PATCH JSON today. The broker cannot claim atomic conditional writes
-based on the existing wire contract.
-
-Allowed mutation fields should be no wider than configured shared summary and
-an allowlisted stage. Reject pipeline, scope, requester, external ID, subject,
-content, owner, associations and arbitrary field edits. Archived ticket
-mutations must be rejected. The broker must perform its own fresh ownership
-check even when the client already read the ticket.
-
-## App: pending requester and creation contract
-
-The pending app obtains the email from the authenticated server-side user
-context, not from model arguments. It does not transfer the full conversation
-or internal tool results automatically.
-
-### Exact contact lookup and email-only creation (privacy exception)
-
-The pending direct-HubSpot client currently uses:
-
-1. `GET /crm/v3/objects/contacts/{percentEncodedEmail}?idProperty=email&properties=email`.
-2. Only following definite 404:
-   `POST /crm/v3/objects/contacts` with `{properties:{email:"lowercase email"}}`.
-3. On a timeout, conflict or uncertain contact-create response, one exact email
-   reread; no blind repeated contact POST.
-
-Consumed response: `{id:"numeric contact ID",archived:false,properties:{email}}`.
-The active contact's primary email must match the authenticated email
-case-insensitively. If an alias lookup returns a different primary email, it
-fails rather than using or changing the profile. No names, company, lifecycle,
-marketing status, consent or extra associations are needed.
-
-**These endpoints are not naturally brand/pipeline scoped.** Even exact lookup
-returning only ID/email is a cross-brand contact-existence oracle. A ticket-only
-proxy should deny them by default. Do not label them safe simply because the
-caller supplies an email, and do not expose arbitrary contact-ID reads or
-updates. HubSpot contact records can also be shared by more than one brand.
-
-Preferred integration: move exact requester resolution and email-only contact
-creation into the broker's scoped ticket-create operation. Return only the
-scoped ticket/result, not unrelated contact profile data or account-wide contact
-lookup APIs. This requires a small deliberate app adapter change; changing the
-base URL alone cannot both preserve the pending direct-contact flow and remove
-its cross-brand lookup capability. The trusted app's assertion of requester
-identity still needs to be explicit in that contract.
-
-### Ticket creation
-
-`POST /crm/v3/objects/tickets` currently sends:
-
-```json
-{
-  "properties": {
-    "subject": "customer-facing title",
-    "content": "customer-safe issue description",
-    "hs_pipeline": "PIPELINE_ID",
-    "hs_pipeline_stage": "NEW_STAGE_ID",
-    "EXTERNAL_ID_PROPERTY": "springmath-au-ACCOUNT_ID-conversation-CONVERSATION_ID",
-    "REQUESTER_EMAIL_PROPERTY": "authenticated@example.com",
-    "SCOPE_PROPERTY": "SCOPE_VALUE"
-  },
-  "associations": [{
-    "to": { "id": "exact requester contact ID" },
-    "types": [{ "associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 16 }]
-  }]
-}
-```
-
-The broker must force configured ownership and initial stage and reject
-contradictory values. A caller-supplied contact association must not allow
-association of arbitrary cross-brand contacts. Broker-owned requester
-association is preferable.
-
-Creation response fields consumed:
-
-- `id`: numeric string; `archived:false`.
-- `properties.hs_pipeline`.
-- `properties[SCOPE_PROPERTY]`.
-- `properties[EXTERNAL_ID_PROPERTY]`.
-- `properties[REQUESTER_EMAIL_PROPERTY]` matching the authenticated email.
-
-App treats 400/401/403/404/422 as definite rejected creates. Other failures,
-including conflict, timeout, malformed success and 5xx, are uncertain; its
-conversation marker remains pending rather than blindly creating another
-ticket. Preserve this distinction and do not return success without a
-confirmed upstream result.
-
-### Readback and reconciliation
-
-After successful creation:
-
-`GET /crm/v3/objects/tickets/{numericTicketId}?properties=<EXTERNAL_ID_PROPERTY>,hs_pipeline,<SCOPE_PROPERTY>,<REQUESTER_EMAIL_PROPERTY>&associations=contacts`.
-
-For idempotency reconciliation before considering a repeated create:
-
-`GET /crm/v3/objects/tickets/{percentEncodedExternalId}?idProperty=<EXTERNAL_ID_PROPERTY>&properties=<EXTERNAL_ID_PROPERTY>,hs_pipeline,<SCOPE_PROPERTY>,<REQUESTER_EMAIL_PROPERTY>&associations=contacts`.
-
-Response includes the same required ticket fields as creation plus
-`associations.contacts.results[]` containing contact `id` strings. The app
-performs another exact-email contact lookup and requires its ID in the
-association results before marking the Pi chat handed off/read-only.
-
-A broker must support the exact configured external-id property, not an
-arbitrary `idProperty`, if this reconciliation route is enabled. Ownership
-checks apply after both numeric and external-id lookup, before any response.
-Do not return all ticket-associated contact IDs by default: the internal
-requester-resolution approach should verify the association privately and
-expose a deliberately limited handoff confirmation instead. Returning unrelated
-association IDs is unnecessary disclosure.
-
-## Smallest future client changes
-
-### Native notes contract addendum
-
-The portal native-communications follow-up now implements a server-configured
-broker origin and the gated ticket-bound notes route. It has not redirected
-production clients by itself. Generic notes, note-ID reads, association APIs
-and all Conversations/email routes remain denied at the broker boundary.
-
-- `GET /springmath/v1/tickets/{ticketId}/notes` returns
-  `{results: NoteRecord[], notesWithheld: boolean}`. Each projected record has
-  `id`, `archived:false`, valid `createdAt`/`updatedAt`,
-  `properties.hs_timestamp`/`properties.hs_note_body`, and a single
-  `associations.tickets.results` entry for the requested ticket. The portal
-  independently validates these fields and renders HTML as untrusted plain text.
-- `notesWithheld:true` means complete association metadata identified at least
-  one ineligible cross-record note; its body is never fetched. No withheld IDs,
-  counts or foreign metadata are returned. Do not claim complete history or no
-  notes when the flag is true. Malformed/paginated metadata aborts the whole read.
-- Listing inspects at most 50 note IDs, with three concurrent per-note chains,
-  an 8MiB cumulative response budget and 200KB raw UTF-8 note body budget. It
-  checks metadata before bodies, rechecks associations with content, then
-  rechecks the parent scope. These are bounded reads, not atomic ownership locks.
-- `POST` takes only `{accountId, expectedUpdatedAt, body}` and returns
-  `201 {id, note}` after reading back that one exact created note, verifying its
-  approved body/ticket-only association and rechecking the parent. The portal
-  verifies the supplied note and rechecks parent scope too. It does not list all
-  historical notes to confirm creation, so an older ticket's listing cap cannot
-  turn a verified create into a false uncertainty.
-- Deploy matching portal/broker versions before enabling notes: missing
-  `notesWithheld` or the verified POST `note` fails closed in the portal.
-
-### Original ticket/contact adapter recommendations
-
-These are recommendations only; no existing app/portal source was changed by
-this audit.
-
-1. Add one **server-only** `HUBSPOT_SUPPORT_API_BASE_URL` with the current
-   `https://api.hubapi.com` as the compatibility default. Validate an HTTPS
-   origin with no userinfo, query or fragment; do not allow request-supplied
-   hosts/paths. Any local HTTP test exception must be explicit and nonproduction.
-2. Portal: replace its single `ORIGIN` constant in `request()` with this validated
-   origin. Continue using its dedicated support-token variable, populated with
-   a broker-issued client token for broker deployments. Preserve the separate
-   generic marketing/HubSpot integration unchanged.
-3. App: route **all** support requests through that origin: ticket root, contact
-   root if ever intentionally supported, and `/account-info/v3/details`.
-   Changing only the ticket URL would leak the broker bearer token toward
-   HubSpot on account/contact calls and leave the privacy boundary incomplete.
-4. Prefer an explicit broker handoff mode for app creation/reconciliation which
-   performs contact resolution within the broker. Keep direct-HubSpot behavior
-   as its own reviewed deployment mode; do not silently fall back to an
-   unrestricted HubSpot token or direct origin after a broker rejection.
-5. Add environment wiring, deterministic mock contract tests and deployment
-   docs in each client repo. Keep region flags, requester authentication,
-   Ochre role ceilings and existing explicit human write approvals.
-6. Use only synthetic data until Ochre accepts deployment ownership, property
-   semantics, contact behavior and support-email automation. A successful CRM
-   mutation does not verify that HubSpot sent or delivered an email.
+See [API/security limits](api-and-security.md), [record-boundary setup](access-boundary.md)
+and [customer communication policy](customer-communications.md).

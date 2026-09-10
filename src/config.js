@@ -1,3 +1,5 @@
+import { isAbsolute, resolve } from 'node:path'
+
 const propertyPattern = /^[a-z][a-z0-9_]{0,99}$/
 const idPattern = /^[0-9]{1,30}$/
 
@@ -42,8 +44,19 @@ export function loadConfig(env = process.env) {
   if (!stages.length || stages.some(id => !idPattern.test(id))) throw new Error('BROKER_ALLOWED_STAGE_IDS must contain explicit stage IDs')
   const writes = boolean('BROKER_ENABLE_WRITES')
   const notesEnabled = boolean('BROKER_ENABLE_NOTES')
+  const repliesEnabled = boolean('BROKER_ENABLE_REPLIES')
   const immutable = boolean('BROKER_SCOPE_IS_IMMUTABLE')
   if (writes && !immutable) throw new Error('Writes require an operator assertion that the ownership marker is immutable')
+  let inboxId, channelAccountId, senderActorId, sendReservationDir
+  if (repliesEnabled) {
+    inboxId = numericId('HUBSPOT_EMAIL_INBOX_ID')
+    channelAccountId = numericId('HUBSPOT_EMAIL_CHANNEL_ACCOUNT_ID')
+    senderActorId = required('HUBSPOT_EMAIL_SENDER_ACTOR_ID')
+    if (!/^A-[0-9]{1,30}$/.test(senderActorId)) throw new Error('Invalid sending agent configuration')
+    sendReservationDir = required('BROKER_SEND_RESERVATION_DIR')
+    if (!isAbsolute(sendReservationDir) || sendReservationDir === '/' || resolve(sendReservationDir) !== sendReservationDir
+      || /[\x00-\x1f\x7f]/.test(sendReservationDir)) throw new Error('Reply reservations require a normalized absolute persistent directory')
+  }
   const closedStage = env.BROKER_CLOSED_STAGE_ID || undefined
   if (closedStage && !stages.includes(closedStage)) throw new Error('Closed stage must be allowed')
   const initialStage = numericId('BROKER_INITIAL_STAGE_ID')
@@ -53,6 +66,7 @@ export function loadConfig(env = process.env) {
     accountId: numericId('HUBSPOT_ACCOUNT_ID'), pipelineId: numericId('HUBSPOT_PIPELINE_ID'),
     tokenHash, scopeProperty, scopeValue, requesterProperty, conversationProperty,
     summaryProperty, stages, initialStage, closedStage, writes, immutable, notesEnabled,
+    repliesEnabled, inboxId, channelAccountId, senderActorId, sendReservationDir,
     host: env.HOST || '127.0.0.1', port: integer('PORT', 8080, 1, 65535),
     maxSearchRecords: integer('BROKER_MAX_SEARCH_RECORDS', 1000, 1, 10000),
     maxBodyBytes: 65536, upstreamTimeoutMs: 10000, operationTimeoutMs: 45000,

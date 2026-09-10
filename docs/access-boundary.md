@@ -1,8 +1,8 @@
 # SpringMath access boundary in Ochre HubSpot
 
 This is the concrete configuration and acceptance plan. **Ticket isolation,
-private requester association and optional ticket-only CRM notes are implemented.
-Ticket-bound Conversations/email routes are still planned and remain denied.**
+private requester association, optional ticket-only CRM notes and ticket-bound
+email replies are implemented. Communications remain feature-gated.**
 The SpringMath Sydney demonstration uses SpringMath's own account; it is not an
 installation in Ochre's account and must never hold Ochre's unrestricted key.
 
@@ -39,8 +39,8 @@ and resolution notifications and explicit customer-facing progress replies.
 Internal notes, shared-summary edits and routine team handoffs should not email
 the customer automatically. HubSpot supports conditional ticket-status email
 automation subject to the Service Hub plan/configuration; contact association
-and status changes alone are not evidence of delivery. The broker's email routes
-remain denied until the planned adapter and actual-mailbox tests are complete.
+and status changes alone are not evidence of delivery. Enable replies only after
+the [email prerequisites and persistent storage](replies.md) are configured.
 
 ## Service key scopes
 
@@ -51,12 +51,12 @@ For the complete proposed workflow, the single upstream service key has:
 | `tickets` | Create/read/update/resolve/archive the permitted tickets; resolution is a Closed pipeline stage. |
 | `crm.objects.contacts.read` | Privately verify the requester's primary email and contact association; also supports native CRM note reads. |
 | `crm.objects.contacts.write` | Create an email-only requester contact if absent and native internal notes. No arbitrary profile edits or marketing subscription changes. |
-| `conversations.read` | Planned: read only the approved ticket's verified email thread and necessary channel metadata. |
-| `conversations.write` | Planned: send an explicitly approved reply in that verified thread. |
+| `conversations.read` | Read only the approved ticket's verified email thread and necessary channel metadata. |
+| `conversations.write` | Send an explicitly approved reply in that verified thread. |
 
 Granting these upstream scopes **does not isolate a brand** or enable new broker
-routes. The two Conversations scopes are preparation for the email adapter; the
-current broker cannot use them for client replies. Schema-write and unrelated
+routes. The two Conversations scopes are required only when replies are enabled.
+Schema-write and unrelated
 marketing scopes are not required at runtime. An Ochre administrator provisions
 the custom properties using HubSpot settings, not the broker service key.
 
@@ -94,7 +94,7 @@ the custom properties using HubSpot settings, not the broker service key.
    relationships: **this grants access to neither their full CRM profile nor
    any other ticket, activity or conversation**. The broker uses only the minimal
    primary-email/ID fields privately for this ticket's handoff checks.
-6. For the planned email adapter, connect a **SpringMath-only team inbox/email
+6. For email replies, connect a **SpringMath-only team inbox/email
    channel**. Record its inbox ID, channel-account ID and authorized sender actor
    ID; these must be fixed broker configuration, not caller arguments. Use a new
    SpringMath ticket-specific email thread, linked to this ticket and requester.
@@ -113,8 +113,8 @@ the custom properties using HubSpot settings, not the broker service key.
 | --- | --- | --- |
 | Ticket | Exact account **AND** approved pipeline **AND** exact ownership-marker value, freshly read | Only allowlisted ticket properties; no global history or association expansion |
 | Contact | Already verified parent ticket; the expected requester contact is associated and its primary email matches | An association-verification boolean; no general contact endpoint, search, profile or activity timeline |
-| Conversation **(planned)** | Verified parent ticket; exactly one approved ticket-bound thread; matching requester; SpringMath-only pinned inbox/channel; no ambiguous, cross-brand or additional-recipient context | Only that thread's permitted email content and minimal reply-routing context |
-| Email reply **(planned)** | Recheck the preceding boundaries immediately before sending; exact approved To/From/subject/body and current context; one verified requester, no CC/BCC | The submitted reply's safe confirmation; API acceptance is not proof of mailbox delivery |
+| Conversation | Verified parent ticket; exactly one approved ticket-bound thread; matching requester; SpringMath-only pinned inbox/channel; no ambiguous, cross-brand or additional-recipient context | Only that thread's permitted email content and minimal reply-routing context |
+| Email reply | Recheck the preceding boundaries immediately before sending; exact approved To/From/subject/body and current context; one verified requester, no CC/BCC | The submitted reply's safe confirmation; API acceptance is not proof of mailbox delivery |
 | Internal note | Verified parent ticket; complete metadata confirms this is a permitted ticket-only note | Allowlisted native note fields, including bounded note HTML; the portal converts it to safe text. Cross-record bodies are not fetched |
 
 An email-domain match, contact/company membership, UI brand selection, queue
@@ -125,14 +125,14 @@ group and verifies results; denied records do not appear in counts or pagination
 
 The implemented requester verifier checks that the expected contact is among
 the ticket's associations; it does not expose or traverse other contacts. The
-planned email adapter imposes the stricter requirement of exactly one associated
+email adapter imposes the stricter requirement of exactly one associated
 requester contact and exactly one permitted email thread before allowing replies.
 
-### Planned Conversations adapter acceptance contract
+### Conversations adapter contract
 
-Expose only ticket-addressed operations (for example
+Expose only ticket-addressed operations:
 `GET /springmath/v1/tickets/{ticketId}/reply-context` and
-`POST /springmath/v1/tickets/{ticketId}/replies`); these routes are **not implemented**.
+`POST /springmath/v1/tickets/{ticketId}/replies`.
 Never expose global `/conversations`, arbitrary thread/message IDs, recipients,
 contact lookup or generic association endpoints as transparent proxy routes.
 
@@ -146,10 +146,9 @@ or sender-channel mismatch must fail closed. Contact associations alone cannot
 prove a thread's ownership. The SpringMath-only channel and thread-creation rules
 are required, not optional hints.
 
-Use a durable approved-send reservation to prevent duplicate replies; do not
-automatically retry an uncertain send. The current stateless broker does not
-provide durable email idempotency. Add that capability and its failure tests
-before enabling replies; do not bypass it with the unrestricted HubSpot key.
+The broker uses a persistent exclusive send reservation before dispatch. Never
+automatically retry an uncertain send or delete its reservation. Storage setup,
+API limits and reconciliation are documented in [customer replies](replies.md).
 
 ## Who controls the boundary
 
@@ -178,7 +177,7 @@ HubSpot account. Ordinary stage transitions inside the pipeline remain allowed.
   contacts/notes/conversations routes cannot widen scope.
 - Cross-record notes are withheld without reading bodies; malformed metadata
   and incomplete association pages fail closed.
-- Before email routes ship: a wrong ticket association, foreign inbox/channel,
+- Before enabling email: a wrong ticket association, foreign inbox/channel,
   mixed-brand history, extra recipient, changed incoming email, duplicate approval
   and uncertain send are rejected without a second email.
 - Verify acknowledgement, explicit reply, Tier 2 return and resolution using a

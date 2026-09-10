@@ -246,6 +246,14 @@ test('real kubectl renders the complete AU overlay locally with an unreachable A
   assert.ok(rendered.every(object => object.metadata.namespace === deployment.namespace))
   assert.ok(rendered.some(object => object.kind === 'Certificate' && object.apiVersion === 'cert-manager.io/v1'))
   assert.ok(rendered.some(object => object.kind === 'Ingress' && object.apiVersion === 'networking.k8s.io/v1'))
+  const pod = rendered.find(object => object.kind === 'Deployment')
+  assert.equal(pod.spec.replicas, 1)
+  assert.equal(pod.spec.strategy.type, 'Recreate')
+  assert.equal(pod.spec.strategy.rollingUpdate, undefined)
+  assert.equal(pod.spec.template.spec.securityContext.fsGroup, 1000)
+  assert.deepEqual(pod.spec.template.spec.volumes, [{ name: 'reply-reservations', persistentVolumeClaim: { claimName: 'hubspot-proxy-reply-reservations' } }])
+  assert.deepEqual(pod.spec.template.spec.containers[0].volumeMounts, [{ name: 'reply-reservations', mountPath: '/data' }])
+  assert.ok(!rendered.some(object => object.kind === 'PersistentVolumeClaim'))
 })
 test('public smoke makes unauthenticated read-only requests over pinned HTTPS and requires 401 for protected APIs', async () => {
   const calls = []

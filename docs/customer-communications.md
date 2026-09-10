@@ -1,11 +1,9 @@
 # Proposed support communication policy
 
-This is a **prescriptive design with implementation in review**, not a claim that
-notifications or production actions are configured. The portal follow-up adds
-native internal notes and explicit replies separately from its shared summary.
-This broker now supports gated ticket-bound native notes; generic notes and all
-conversations/email routes remain denied. Direct email testing in our own
-HubSpot account does not demonstrate broker email capability.
+This is the support policy, not proof of configured notifications or mailbox
+delivery. The broker supports gated ticket-bound native notes and explicit
+replies separately from the shared summary. Generic notes/conversation routes
+remain denied. See [reply prerequisites and verification](replies.md).
 
 | Event/action | Internal record/notification | Customer email |
 | --- | --- | --- |
@@ -46,11 +44,10 @@ investigation summary for cross-team work.
 2. Review/deploy the portal's distinct approval-gated **Add internal note** and
    **Send customer reply** tools. Saved role allowlists require deliberate
    new-tool activation; a summary edit never silently becomes either action.
-3. The direct-HubSpot portal reply path binds requester/contact, ticket/thread,
-   inbox/channel and sender; uses durable dispatch claims; and reads the submitted
-   message back. It needs an existing linked email thread. Extend this broker
-   with equivalent ticket-bound email routes before enabling Ochre replies;
-   never bypass the broker with an unrestricted upstream key.
+3. Enable the ticket-bound broker reply adapter after provisioning persistent
+   dispatch storage and a verified existing email thread. It binds requester,
+   thread, inbox/channel and sender; reserves before sending and reads back the
+   submitted message. Never bypass the broker with an unrestricted upstream key.
 4. Configure the pipeline's receipt/team notification rules and explicit reply
    plus closure behavior. Verify reply routing back into the same support thread.
 5. Test one synthetic handoff through receipt, Tier 2, return, reply and closure;

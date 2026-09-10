@@ -1,0 +1,14 @@
+# Apply once with the AU administrator, before deploying the reply-capable pod.
+# Deliberately not part of the CI apply set: the deploy role cannot delete storage.
+# Never delete/recreate this claim or roll back to an empty ledger after a send.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hubspot-proxy-reply-reservations
+  namespace: hubspot-proxy-demo
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gp3-encrypted
+  resources:
+    requests:
+      storage: 1Gi

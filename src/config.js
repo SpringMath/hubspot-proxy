@@ -41,6 +41,7 @@ export function loadConfig(env = process.env) {
   const stages = (env.BROKER_ALLOWED_STAGE_IDS || '').split(',').filter(Boolean)
   if (!stages.length || stages.some(id => !idPattern.test(id))) throw new Error('BROKER_ALLOWED_STAGE_IDS must contain explicit stage IDs')
   const writes = boolean('BROKER_ENABLE_WRITES')
+  const notesEnabled = boolean('BROKER_ENABLE_NOTES')
   const immutable = boolean('BROKER_SCOPE_IS_IMMUTABLE')
   if (writes && !immutable) throw new Error('Writes require an operator assertion that the ownership marker is immutable')
   const closedStage = env.BROKER_CLOSED_STAGE_ID || undefined
@@ -51,7 +52,7 @@ export function loadConfig(env = process.env) {
     upstreamToken: required('HUBSPOT_ACCESS_TOKEN'),
     accountId: numericId('HUBSPOT_ACCOUNT_ID'), pipelineId: numericId('HUBSPOT_PIPELINE_ID'),
     tokenHash, scopeProperty, scopeValue, requesterProperty, conversationProperty,
-    summaryProperty, stages, initialStage, closedStage, writes, immutable,
+    summaryProperty, stages, initialStage, closedStage, writes, immutable, notesEnabled,
     host: env.HOST || '127.0.0.1', port: integer('PORT', 8080, 1, 65535),
     maxSearchRecords: integer('BROKER_MAX_SEARCH_RECORDS', 1000, 1, 10000),
     maxBodyBytes: 65536, upstreamTimeoutMs: 10000, operationTimeoutMs: 45000,

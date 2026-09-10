@@ -2,6 +2,9 @@
 const ORIGIN = 'https://api.hubapi.com'
 const TICKETS = '/crm/v3/objects/tickets'
 const CONTACTS = '/crm/v3/objects/contacts'
+const NOTES = '/crm/v3/objects/notes'
+const NOTE_ASSOCIATIONS = ['tickets', 'contacts', 'companies', 'deals']
+const MAX_NOTES = 50
 const ID = /^[0-9]{1,30}$/
 const validId = value => typeof value === 'string' && ID.test(value)
 const EXTERNAL_ID = /^[a-zA-Z0-9_-]{8,160}$/
@@ -58,7 +61,7 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     return result
   }
   async function upstream(path, { method = 'GET', body, signal, allow404 = false, expectedStatus } = {}) {
-    const isMutation = ['PATCH', 'DELETE'].includes(method) || (method === 'POST' && [TICKETS, CONTACTS].includes(path))
+    const isMutation = ['PATCH', 'DELETE'].includes(method) || (method === 'POST' && [TICKETS, CONTACTS, NOTES].includes(path))
     // `path` is built only from constants and individually validated/encoded values below.
     if (!path.startsWith('/') || path.startsWith('//') || /[\r\n\\]/.test(path)) malformed()
     let response
@@ -367,6 +370,88 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
       await readTicket(id, { props: boundary, archived: true, signal })
     } catch { fail(502, 'WRITE_OUTCOME_UNKNOWN') }
   }
+  function notesAllowed() { if (!config.notesEnabled) missing() }
+  function noteBoundary(row, noteId, ticketId) {
+    if (!isObject(row) || row.id !== noteId || row.archived !== false || !isObject(row.associations)
+      || !isObject(row.associations.tickets)) missing()
+    // Notes shared with any other ticket or standard CRM record are deliberately
+    // withheld. Missing association pages mean empty; an absent tickets page does
+    // not prove ownership. The broker never exposes generic note-ID access.
+    for (const [kind, page] of Object.entries(row.associations)) {
+      if (!NOTE_ASSOCIATIONS.includes(kind) || !isObject(page) || !Array.isArray(page.results)
+        || (page.paging !== undefined && page.paging !== null)) missing()
+      if (kind === 'tickets') {
+        if (page.results.length !== 1 || page.results[0]?.id !== ticketId) missing()
+      } else if (page.results.length) missing()
+    }
+  }
+  function projectNote(row, ticketId) {
+    const timestamp = row.properties?.hs_timestamp
+    if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))
+      || typeof row.createdAt !== 'string' || !Number.isFinite(Date.parse(row.createdAt))
+      || typeof row.updatedAt !== 'string' || !Number.isFinite(Date.parse(row.updatedAt))
+      || typeof row.properties?.hs_note_body !== 'string' || row.properties.hs_note_body.length > 65536) malformed()
+    return {
+      id: row.id, archived: false, createdAt: row.createdAt, updatedAt: row.updatedAt,
+      properties: { hs_timestamp: timestamp, hs_note_body: row.properties.hs_note_body },
+      associations: { tickets: { results: [{ id: ticketId, type: 'note_to_ticket' }] } },
+    }
+  }
+  async function readNote(noteId, ticketId, signal) {
+    const params = new URLSearchParams({ archived: 'false', associations: NOTE_ASSOCIATIONS.join(','), properties: 'hs_timestamp' })
+    const boundary = await upstream(`${NOTES}/${noteId}?${params}`, { signal, allow404: true })
+    noteBoundary(boundary, noteId, ticketId)
+    params.set('properties', 'hs_timestamp,hs_note_body')
+    const row = await upstream(`${NOTES}/${noteId}?${params}`, { signal, allow404: true })
+    noteBoundary(row, noteId, ticketId)
+    return projectNote(row, ticketId)
+  }
+  async function listNotes(id, signal) {
+    notesAllowed()
+    await readTicket(id, { props: boundary, signal })
+    const page = await upstream(`${TICKETS}/${id}/associations/notes?limit=${MAX_NOTES}`, { signal })
+    if (!isObject(page) || !Array.isArray(page.results) || page.results.length > MAX_NOTES
+      || (page.paging !== undefined && page.paging !== null)) fail(503, 'QUERY_BOUND_EXCEEDED')
+    const ids = page.results.map(row => row?.id)
+    if (ids.some(id => !validId(id)) || new Set(ids).size !== ids.length) malformed()
+    const results = []
+    let totalBody = 0
+    for (const noteId of ids) {
+      const note = await readNote(noteId, id, signal)
+      totalBody += Buffer.byteLength(note.properties.hs_note_body)
+      if (totalBody > 200000) fail(503, 'QUERY_BOUND_EXCEEDED')
+      results.push(note)
+    }
+    // Never return partial results after reassignment, archival or pagination.
+    await readTicket(id, { props: boundary, signal })
+    return { results }
+  }
+  async function createNote(id, body, signal) {
+    notesAllowed()
+    writeAllowed()
+    keys(body, ['accountId', 'expectedUpdatedAt', 'body'])
+    if (body.accountId !== config.accountId) invalid()
+    const expectedAt = text(body.expectedUpdatedAt, 100, true)
+    if (!Number.isFinite(Date.parse(expectedAt))) invalid()
+    const plain = text(body.body, 10000, true).replace(/\r\n?/g, '\n').trim()
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(plain)) invalid()
+    const current = await readTicket(id, { props: [...boundary, 'hs_lastmodifieddate'], signal })
+    if (typeof current.properties.hs_lastmodifieddate !== 'string') malformed()
+    if (current.properties.hs_lastmodifieddate !== expectedAt) fail(409, 'STALE_APPROVAL')
+    const escaped = plain.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
+    const html = `<p>${escaped.replace(/\n/g, '<br>')}</p>`
+    const created = await upstream(NOTES, { method: 'POST', signal, expectedStatus: 201, body: {
+      properties: { hs_timestamp: new Date().toISOString(), hs_note_body: html },
+      associations: [{ to: { id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 228 }] }],
+    } })
+    try {
+      if (!validId(created?.id)) malformed()
+      const note = await readNote(created.id, id, signal)
+      if (note.properties.hs_note_body !== html) malformed()
+      await readTicket(id, { props: boundary, signal })
+      return { id: note.id }
+    } catch { fail(502, 'WRITE_OUTCOME_UNKNOWN') }
+  }
   function parseRoute(method, rawUrl) {
     if (typeof rawUrl !== 'string' || rawUrl.length > 4096 || !rawUrl.startsWith('/') || rawUrl.startsWith('//')
       || /[\\\x00-\x20#]/.test(rawUrl) || /%2f|%5c|%2e|%00/i.test(rawUrl) || rawUrl.split('?')[0].split('/').some(part => part === '.' || part === '..')) invalid()
@@ -381,6 +466,11 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     else if (method === 'POST' && path === `${TICKETS}/search`) kind = 'search'
     else if (path === TICKETS && method === 'POST') kind = 'create'
     else if (path === TICKETS && method === 'GET') kind = 'archive-list'
+    else if (/^\/springmath\/v1\/tickets\/[0-9]{1,30}\/notes$/.test(path) && config.notesEnabled) {
+      id = path.split('/')[4]
+      if (method === 'GET') kind = 'notes-list'
+      else if (method === 'POST') kind = 'notes-create'
+    }
     else if (path.startsWith(`${TICKETS}/`) && !path.slice(TICKETS.length + 1).includes('/')) {
       try { id = decodeURIComponent(path.slice(TICKETS.length + 1)) } catch { invalid() }
       const lookup = query.get('idProperty') === config.conversationProperty
@@ -396,7 +486,7 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
   }
   async function handle({ method, url, body }) {
     const { kind, id, query } = parseRoute(method, url)
-    if (!['create', 'update', 'search'].includes(kind) && body !== undefined) invalid()
+    if (!['create', 'update', 'search', 'notes-create'].includes(kind) && body !== undefined) invalid()
     const signal = AbortSignal.timeout(config.operationTimeoutMs)
     await account(signal)
     if (kind === 'account') return { status: 200, body: { portalId: Number(config.accountId) } }
@@ -406,6 +496,8 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     if (kind === 'create') return { status: 201, body: await create(body, signal) }
     if (kind === 'update') return { status: 200, body: await update(id, body, signal) }
     if (kind === 'archive') { await archive(id, signal); return { status: 204 } }
+    if (kind === 'notes-list') return { status: 200, body: await listNotes(id, signal) }
+    if (kind === 'notes-create') return { status: 201, body: await createNote(id, body, signal) }
     const idProperty = query.get('idProperty') || undefined
     if (idProperty && idProperty !== config.conversationProperty) invalid()
     if (query.has('archived') && !['true', 'false'].includes(query.get('archived'))) invalid()

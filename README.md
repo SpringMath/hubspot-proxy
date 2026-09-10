@@ -53,6 +53,8 @@ All business routes require `Authorization: Bearer <broker-token>`.
 | POST | `/crm/v3/objects/tickets` | Forces pipeline, marker and initial stage; privately ensures requester contact and verifies ticket association. |
 | PATCH | `/crm/v3/objects/tickets/{ticketId}` | Only the configured shared summary and allowlisted stage. |
 | DELETE | `/crm/v3/objects/tickets/{ticketId}` | HubSpot archive/recycling bin, not permanent deletion or resolution. |
+| GET | `/springmath/v1/tickets/{ticketId}/notes` | Optional native notes on this scoped ticket only; complete bounded list. |
+| POST | `/springmath/v1/tickets/{ticketId}/notes` | Optional ticket-only internal note; exact account/freshness/body, never a customer email. |
 | GET | `/healthz`, `/readyz` | Minimal unauthenticated probes; readiness checks the pinned upstream account. |
 
 Foreign and missing tickets have the same `404 NOT_FOUND` response. Unknown
@@ -64,9 +66,45 @@ allowlisted `properties` (plus the mandatory boundary properties). They never
 include arbitrary upstream extensions, history, vendor links or contact IDs.
 
 **Not exposed:** contacts lookup/search/edit, arbitrary associations, batch APIs,
-companies, deals, schemas, pipeline mutations, restore/permanent delete, notes,
+companies, deals, schemas, pipeline mutations, restore/permanent delete, generic notes,
 email/conversations APIs, marketing data, or arbitrary URLs. The broker uses a
 few of those APIs internally for bounded checks; they are not caller routes.
+
+### Optional native internal notes
+
+`BROKER_ENABLE_NOTES=false` by default. When enabled, the custom ticket-bound
+notes route supports GET and POST only; POST also requires the existing
+write/immutable-scope gates. The upstream credential needs the CRM Notes API
+scopes (`crm.objects.contacts.read` / `crm.objects.contacts.write`),
+but the broker still exposes no public contact API.
+
+POST body:
+
+```json
+{
+  "accountId": "50288738",
+  "expectedUpdatedAt": "2026-09-10T12:00:00.000Z",
+  "body": "Customer-safe internal support investigation note."
+}
+```
+
+POST returns `201 {"id":"<note-id>"}` only after scoped read-back. The broker
+constructs the native note-to-ticket association (228); caller associations,
+raw HTML, attachments, note IDs and arbitrary properties are not accepted.
+GET returns projected `{results:[...]}` native CRM note records, at most 50
+and 200KB of note HTML. Partial/paginated associations and notes linked to other
+tickets or known contacts/companies/deals are withheld. Use ticket-only notes:
+custom-object associations are not exhaustively discoverable by this adapter.
+
+These are shared staff notes, not private SpringMath engineering records or
+email messages. The portal's durable dispatch reservation guards approval
+replays; this stateless broker does **not** promise idempotent note POSTs.
+Never automatically retry an uncertain create. The ownership immutability
+constraint below also applies to note associations.
+
+Native customer email needs a ticket-bound Conversations adapter, which is
+**not exposed by this broker yet**. The portal's direct-HubSpot demo implementation
+refuses email sending when configured with a broker origin.
 
 ### Search, counts and pagination
 

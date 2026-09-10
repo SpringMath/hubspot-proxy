@@ -1,9 +1,11 @@
 # Proposed support communication policy
 
-This is a **prescriptive design for implementation**, not a claim that these
-notifications or portal actions are configured today. The current portal updates
-a shared summary property; that is not a native HubSpot internal note or an email
-reply. The broker currently denies notes/conversations/email routes deliberately.
+This is a **prescriptive design with implementation in review**, not a claim that
+notifications or production actions are configured. The portal follow-up adds
+native internal notes and explicit replies separately from its shared summary.
+This broker now supports gated ticket-bound native notes; generic notes and all
+conversations/email routes remain denied. Direct email testing in our own
+HubSpot account does not demonstrate broker email capability.
 
 | Event/action | Internal record/notification | Customer email |
 | --- | --- | --- |
@@ -35,13 +37,16 @@ investigation summary for cross-team work.
 
 ## Implementation and verification still required
 
-1. Choose the exact native note/thread APIs and minimal scopes. Any broker note
-   route must first verify its parent ticket's scope; it must not expose global
-   note search or arbitrary cross-brand note/association IDs.
-2. Add distinct, approval-gated portal actions for **Add internal note** and
-   **Send customer reply**. A summary edit must not silently become either action.
-3. Bind sender, requester, thread and ticket server-side, and verify actual send
-   outcomes. Handle retries/idempotency without sending duplicate messages.
+1. Review/deploy the implemented native note routes with the flag off initially;
+   they verify parent scope and ticket-only standard-record associations.
+2. Review/deploy the portal's distinct approval-gated **Add internal note** and
+   **Send customer reply** tools. Saved role allowlists require deliberate
+   new-tool activation; a summary edit never silently becomes either action.
+3. The direct-HubSpot portal reply path binds requester/contact, ticket/thread,
+   inbox/channel and sender; uses durable dispatch claims; and reads the submitted
+   message back. It needs an existing linked email thread. Extend this broker
+   with equivalent ticket-bound email routes before enabling Ochre replies;
+   never bypass the broker with an unrestricted upstream key.
 4. Configure the pipeline's receipt/team notification rules and explicit reply
    plus closure behavior. Verify reply routing back into the same support thread.
 5. Test one synthetic handoff through receipt, Tier 2, return, reply and closure;

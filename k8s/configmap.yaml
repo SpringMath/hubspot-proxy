@@ -22,5 +22,7 @@ data:
   # Fail closed until the account owner has established marker immutability.
   BROKER_SCOPE_IS_IMMUTABLE: "false"
   BROKER_ENABLE_WRITES: "false"
+  # Optional ticket-only notes; POST also requires both write gates above.
+  BROKER_ENABLE_NOTES: "false"
   HOST: "0.0.0.0"
   PORT: "8080"

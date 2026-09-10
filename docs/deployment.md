@@ -23,6 +23,7 @@ Have the HubSpot account owner approve these values:
 | `HUBSPOT_REQUESTER_EMAIL_PROPERTY` | Ticket property holding the authenticated requester's email. |
 | `HUBSPOT_CONVERSATION_ID_PROPERTY` | Ticket property holding the originating app conversation identifier. |
 | `HUBSPOT_SUMMARY_PROPERTY` | Shared support summary; never an internal-only notes field. |
+| `BROKER_ENABLE_NOTES` | Default `false`. Optional ticket-bound native CRM notes; POST also requires write/immutable-scope gates. No generic note or email API. |
 | `BROKER_ALLOWED_STAGE_IDS` | Comma-separated status IDs callers may use. |
 | `BROKER_INITIAL_STAGE_ID` | Required creation stage; must be in the permitted set. |
 | `BROKER_CLOSED_STAGE_ID` | Optional verified Closed status ID for resolution. |

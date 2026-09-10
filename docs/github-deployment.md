@@ -18,7 +18,11 @@ itself namespace, cluster, IAM, DNS-provider or certificate-issuer privileges.
    `975774911479`, region `ap-southeast-2`, with immutable image tags.
 2. Create IAM role `hubspot-proxy-github-deploy-au`. Its OIDC trust must require
    `aud=sts.amazonaws.com` and exactly
-   `sub=repo:SpringMath/hubspot-proxy:environment:australia-demo`.
+   `sub=repo:SpringMath@219569131/hubspot-proxy@1364220697:environment:australia-demo`.
+   This repository uses GitHub's immutable owner/repository IDs in its subject.
+   Verify the current prefix with
+   `gh api repos/SpringMath/hubspot-proxy/actions/oidc/customization/sub`;
+   append `:environment:australia-demo`. Keep the exact subject, not a wildcard.
    Grant ECR push/pull only for the dedicated broker repository,
    `ecr:GetAuthorizationToken` on `*`, and `eks:DescribeCluster` for
    `arn:aws:eks:ap-southeast-2:975774911479:cluster/springmath-au`.
@@ -94,7 +98,10 @@ branch fell behind, update it, obtain review again and merge the new head.
 
 1. Runs Node syntax checks and all contract/security tests, then verifies the
    merged PR and exact reviewed source tree before acquiring AWS credentials.
-2. Uses GitHub OIDC for the broker-only IAM role; no static AWS secret is used.
+2. Uses GitHub OIDC for the broker-only IAM role and verifies AWS account
+   `975774911479` before ECR/EKS access; no static AWS secret is used. The pinned
+   credentials action does not support `allowed-account-ids`, so an explicit
+   STS identity check enforces the account boundary.
 3. Builds native ARM64 for Sydney's ARM64 nodes, pushes ECR, and deploys by
    immutable registry digest, not a moving tag.
 4. Renders `k8s/overlays/au` with a purely local, empty JSON Patch and kubectl's

@@ -1,0 +1,29 @@
+# OPTIONAL, DISABLED EXAMPLE. Not included in the base kustomization.
+# Replace hostname/class, provision a valid TLS certificate, and add an exact
+# ingress-controller namespace+pod NetworkPolicy allow rule before applying.
+# Do not expose this with plaintext HTTP or a bare public LoadBalancer service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hubspot-proxy
+  namespace: hubspot-proxy-demo
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "128k"
+spec:
+  ingressClassName: REPLACE_INGRESS_CLASS
+  tls:
+    - hosts:
+        - hubspot-broker.example.invalid
+      secretName: hubspot-proxy-tls
+  rules:
+    - host: hubspot-broker.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hubspot-proxy
+                port:
+                  name: http

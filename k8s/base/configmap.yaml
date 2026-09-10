@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hubspot-proxy-config
+  namespace: hubspot-proxy-demo
+data:
+  # Replace all REPLACE_* values before deploying. These are not credentials.
+  HUBSPOT_ACCOUNT_ID: "REPLACE_ACCOUNT_ID"
+  HUBSPOT_PIPELINE_ID: "REPLACE_PIPELINE_ID"
+  # Dedicated ticket property: never use a mutable stage as the brand marker.
+  HUBSPOT_SCOPE_PROPERTY: "REPLACE_IMMUTABLE_BRAND_PROPERTY"
+  HUBSPOT_SCOPE_VALUE: "REPLACE_APPROVED_BRAND_VALUE"
+  HUBSPOT_REQUESTER_EMAIL_PROPERTY: "REPLACE_REQUESTER_EMAIL_PROPERTY"
+  HUBSPOT_CONVERSATION_ID_PROPERTY: "REPLACE_CONVERSATION_ID_PROPERTY"
+  HUBSPOT_SUMMARY_PROPERTY: "REPLACE_SHARED_SUMMARY_PROPERTY"
+  BROKER_ALLOWED_STAGE_IDS: "REPLACE_COMMA_SEPARATED_STAGE_IDS"
+  BROKER_INITIAL_STAGE_ID: "REPLACE_INITIAL_STAGE_ID"
+  # Larger queues fail closed instead of returning incomplete scoped results.
+  BROKER_MAX_SEARCH_RECORDS: "1000"
+  # Optional until resolve is supported and a CLOSED stage is verified.
+  BROKER_CLOSED_STAGE_ID: ""
+  # Fail closed until the account owner has established marker immutability.
+  BROKER_SCOPE_IS_IMMUTABLE: "false"
+  BROKER_ENABLE_WRITES: "false"
+  # Optional ticket-only notes; POST also requires both write gates above.
+  BROKER_ENABLE_NOTES: "false"
+  HOST: "0.0.0.0"
+  PORT: "8080"

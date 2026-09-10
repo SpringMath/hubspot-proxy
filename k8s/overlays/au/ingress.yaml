@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hubspot-proxy
+  namespace: hubspot-proxy-demo
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: hubspotproxy.springmath.au
+    external-dns.alpha.kubernetes.io/cloudflare-proxied: "false"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - hubspotproxy.springmath.au
+      secretName: hubspot-proxy-tls
+  rules:
+    - host: hubspotproxy.springmath.au
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hubspot-proxy
+                port:
+                  name: http
+# No HTTP route: credentials must never be sent over plaintext, even to redirect.

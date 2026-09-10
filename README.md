@@ -4,6 +4,28 @@ A small Node.js service that gives SpringMath a **restricted ticket API**, while
 the HubSpot account owner retains the underlying account-wide service key.
 No runtime dependencies. No database. No generic reverse-proxy route.
 
+## Support handoff and callers
+
+An authenticated AU customer requests human support in Pi. The integration
+automatically reuses an exact active requester contact or creates an email-only
+contact, creates the Tier 1 ticket, and verifies the contact association before
+Pi closes. This happens on support handoff, not as a bulk import of app users.
+Ochre Support works the same ticket in the portal and can escalate it to
+SpringMath Tier 2. SpringMath staff investigate and return it to Ochre or resolve
+it as appropriate. No Zendesk ticket is created; archive is not resolution.
+
+**Tier 2 is work routing, not the initial grant of read access.** Authorized
+portal support roles can read in-scope tickets across statuses. Escalated-only
+visibility would require an additional server-enforced role policy.
+
+**Both the app server and portal server must use the broker** for the intended
+Ochre setup. Routing only the portal through it while the app retains Ochre's
+account-wide key would not solve the trust boundary. Neither credential belongs
+in a browser. The clients still authenticate users and enforce role permissions;
+the broker verifies the fixed account/pipeline/ownership boundary. See
+[client integration](#client-integration-is-a-separate-change) for the pending
+cutover; this repository does not redirect either deployed client.
+
 ```mermaid
 flowchart LR
   A[SpringMath app and portal] -->|Broker bearer token| B[Ochre-controlled broker]
@@ -25,6 +47,17 @@ would **not** fix the trust boundary.
 2. Configure one account, pipeline, immutable ownership marker, and allowed stages.
 3. Start **read-only**; test synthetic allowed and denied tickets.
 4. Enable writes only after the account owner accepts the constraints below.
+
+SpringMath's Sydney demo uses [main-branch GitHub Actions deployment](docs/github-deployment.md)
+at `https://hubspotproxy.springmath.au`, with one small ARM64 pod, dedicated ECR
+repository and namespace-limited OIDC role. See that runbook for release status
+and required one-time setup; the existence of this URL is not proof of a rollout.
+
+For Ochre's HubSpot setup, see the [concrete record-boundary plan](docs/access-boundary.md):
+the exact custom fields, pipeline, requester/contact association, and dedicated
+inbox/thread rules. A shared contact never grants access to that person's
+other-brand records. Conversations/email isolation is planned and is **not yet
+implemented by this broker**; those routes remain denied.
 
 ```sh
 npm run check
@@ -53,6 +86,8 @@ All business routes require `Authorization: Bearer <broker-token>`.
 | POST | `/crm/v3/objects/tickets` | Forces pipeline, marker and initial stage; privately ensures requester contact and verifies ticket association. |
 | PATCH | `/crm/v3/objects/tickets/{ticketId}` | Only the configured shared summary and allowlisted stage. |
 | DELETE | `/crm/v3/objects/tickets/{ticketId}` | HubSpot archive/recycling bin, not permanent deletion or resolution. |
+| GET | `/springmath/v1/tickets/{ticketId}/notes` | Optional permitted native notes on this scoped ticket; presence-only notice if cross-record notes were withheld. |
+| POST | `/springmath/v1/tickets/{ticketId}/notes` | Optional ticket-only internal note; exact account/freshness/body, never a customer email. |
 | GET | `/healthz`, `/readyz` | Minimal unauthenticated probes; readiness checks the pinned upstream account. |
 
 Foreign and missing tickets have the same `404 NOT_FOUND` response. Unknown
@@ -64,9 +99,55 @@ allowlisted `properties` (plus the mandatory boundary properties). They never
 include arbitrary upstream extensions, history, vendor links or contact IDs.
 
 **Not exposed:** contacts lookup/search/edit, arbitrary associations, batch APIs,
-companies, deals, schemas, pipeline mutations, restore/permanent delete, notes,
+companies, deals, schemas, pipeline mutations, restore/permanent delete, generic notes,
 email/conversations APIs, marketing data, or arbitrary URLs. The broker uses a
 few of those APIs internally for bounded checks; they are not caller routes.
+
+### Optional native internal notes
+
+`BROKER_ENABLE_NOTES=false` by default. When enabled, the custom ticket-bound
+notes route supports GET and POST only; POST also requires the existing
+write/immutable-scope gates. The upstream credential needs the CRM Notes API
+scopes (`crm.objects.contacts.read` / `crm.objects.contacts.write`),
+but the broker still exposes no public contact API.
+
+POST body:
+
+```json
+{
+  "accountId": "50288738",
+  "expectedUpdatedAt": "2026-09-10T12:00:00.000Z",
+  "body": "Customer-safe internal support investigation note."
+}
+```
+
+POST returns `201 {"id":"<note-id>","note":{...}}` only after scoped read-back.
+The `note` is the single freshly verified projected native record, not a full
+history list. This confirms creation independently of the 50-note listing cap.
+The broker
+constructs the native note-to-ticket association (228); caller associations,
+raw HTML, attachments, note IDs and arbitrary properties are not accepted.
+GET returns projected `{results:[...],notesWithheld:false}` native CRM note
+records, at most 50 and 200KB of raw UTF-8 note HTML. A complete association
+page proving a note links to other tickets or known contacts/companies/deals
+withholds that note **without fetching its body** and sets `notesWithheld:true`.
+The notice exposes no omitted IDs, counts or foreign record metadata; clients
+must not claim the returned notes are the full history. Malformed or paginated
+associations fail the entire read instead of returning a partial result.
+At most three per-note chains run concurrently, preserving metadata-before-body
+checks and final ticket scope rechecks within the existing 8MiB cumulative
+transfer budget. Use ticket-only notes:
+custom-object associations are not exhaustively discoverable by this adapter.
+
+These are shared staff notes, not private SpringMath engineering records or
+email messages. The portal's durable dispatch reservation guards approval
+replays; this stateless broker does **not** promise idempotent note POSTs.
+Never automatically retry an uncertain create. The ownership immutability
+constraint below also applies to note associations.
+
+Native customer email needs a ticket-bound Conversations adapter, which is
+**not exposed by this broker yet**. The portal's direct-HubSpot demo implementation
+refuses email sending when configured with a broker origin.
 
 ### Search, counts and pagination
 
@@ -160,10 +241,15 @@ unrestricted upstream token is permitted. See the [contract audit](docs/client-c
   reply-thread, permissions and notification workflows. CRM success is not proof
   of email delivery. See the [proposed communication policy](docs/customer-communications.md).
 
-Upstream scopes: `tickets`, plus `crm.objects.contacts.read` and
-`crm.objects.contacts.write` for requester association. Required ticket-property
-metadata must be readable. Do not grant unrelated marketing scopes to this key.
-Extra upstream privilege never automatically becomes a broker route.
+Upstream scopes for the complete planned workflow: `tickets`,
+`crm.objects.contacts.read`, `crm.objects.contacts.write`, `conversations.read`
+and `conversations.write`. Contact permissions support private requester
+association and native CRM notes. The Conversations scopes prepare for the
+future ticket-bound email adapter; the current broker still denies those routes.
+Required ticket-property metadata must be readable. No schema-write or unrelated
+marketing scopes are needed at runtime. Extra upstream privilege never
+automatically becomes a broker route. See the [scope-by-purpose table and
+implemented-versus-planned boundaries](docs/access-boundary.md).
 
 ## Verification and release
 
@@ -172,10 +258,12 @@ does not send emails or mutate HubSpot. Tests cover scope bypasses, OR filters,
 stale results, archive paging, response minimization, denied routes/properties,
 requester association, unknown write outcomes, bearer handling and resource limits.
 
-CI checks syntax, tests, renders Kubernetes, and builds the container. Image
-publication is manual; no workflow deploys to a cluster. Require review—including
-Claude approval as requested—before merging/releasing. A passing test is not a
-security assessment or confirmation of an installed Ochre deployment.
+CI checks syntax, tests, renders Kubernetes, and builds the container. Merged
+`main` pushes trigger the AU deployment workflow after it verifies formal Claude
+approval and an identical reviewed source tree. Direct unreviewed pushes cannot
+deploy. Optional GHCR publication remains manual; AU uses its own ECR registry.
+See [GitHub deployment and rollback](docs/github-deployment.md). A passing test
+is not a security assessment or confirmation of an installed Ochre deployment.
 
 Official API references: [HubSpot tickets](https://developers.hubspot.com/docs/api-reference/legacy/crm/objects/tickets/guide),
 [CRM search](https://developers.hubspot.com/docs/api-reference/legacy/crm/search-the-crm),

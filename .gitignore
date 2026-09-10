@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.secret
+*.secret.json
+coverage/
+.DS_Store

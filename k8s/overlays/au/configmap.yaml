@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hubspot-proxy-config
+  namespace: hubspot-proxy-demo
+data:
+  # SpringMath's OWN HubSpot account, synthetic demonstration only.
+  # Ochre must operate its own broker and retain its own upstream credential.
+  HUBSPOT_ACCOUNT_ID: "50288738"
+  HUBSPOT_PIPELINE_ID: "933928091"
+  HUBSPOT_SCOPE_PROPERTY: "sm_au_support_scope"
+  HUBSPOT_SCOPE_VALUE: "springmath-au-test"
+  HUBSPOT_REQUESTER_EMAIL_PROPERTY: "sm_au_requester_email"
+  HUBSPOT_CONVERSATION_ID_PROPERTY: "sm_au_conversation_key"
+  HUBSPOT_SUMMARY_PROPERTY: "sm_au_support_summary"
+  BROKER_ALLOWED_STAGE_IDS: "1435131560,1435131561,1435131562,1435131563,1435131564"
+  BROKER_INITIAL_STAGE_ID: "1435131560"
+  BROKER_CLOSED_STAGE_ID: "1435131564"
+  BROKER_ENABLE_WRITES: "false"
+  BROKER_SCOPE_IS_IMMUTABLE: "false"
+  BROKER_ENABLE_NOTES: "false"

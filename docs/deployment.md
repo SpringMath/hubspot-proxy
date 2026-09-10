@@ -11,6 +11,12 @@ This is a deliberately limited HubSpot-shaped support API, not an unrestricted
 HTTP proxy. Review the [README](../README.md) endpoint contract before connecting
 an existing client. Do not redirect a general-purpose HubSpot integration here.
 
+The optional [SpringMath Sydney deployment](github-deployment.md) uses the
+`k8s/overlays/au` overlay and reviewed `main` pushes to deploy automatically.
+That overlay is a public **authenticated HTTPS API**, not the private-only base
+demonstration described below. Ochre should adapt the base to its own hosting.
+See the [record-boundary setup](access-boundary.md) before configuring HubSpot.
+
 ## 1. Agree the boundary
 
 Have the HubSpot account owner approve these values:
@@ -173,7 +179,8 @@ docker build --tag hubspot-proxy:demo .
 ```
 
 For the shared repository, CI runs checks, tests, Kubernetes rendering, and a
-container build on pull requests and `main`. **It does not deploy.** A maintainer
+container build on pull requests and `main`. This generic `CI` workflow does not
+deploy; the separate [AU workflow](github-deployment.md) does. A maintainer
 can manually run `CI` on reviewed `main` with `publish_image=true` to publish
 `ghcr.io/springmath/hubspot-proxy:sha-<commit>`. Configure required reviewers on
 the GitHub `image-publish` environment before treating it as a release gate.
@@ -188,14 +195,15 @@ CI is not Claude approval. Before production PR merges, configure the Claude
 GitHub app and its approved API credential, then require a **formal Claude
 APPROVED review on the current commit** as well as CI. A skipped check, successful
 empty action, ordinary comment, or stale review is not approval. No Claude
-credential or active review workflow is provisioned by these manifests.
+credential is provisioned by these manifests. The checked-in Claude workflow
+requires the GitHub App and a separately provisioned review credential.
 
 ## 5. Install the private Kubernetes demonstration
 
 Use an explicitly selected cluster context. Do not apply all files recursively:
 the `examples` directory contains placeholders, not deployment resources.
 
-1. Review `k8s/configmap.yaml` and replace each policy placeholder. Keep
+1. Review `k8s/base/configmap.yaml` and replace each policy placeholder. Keep
    `BROKER_ENABLE_WRITES=false`. Attest marker immutability only when step 1 is
    complete.
 2. Set the deployment image to the reviewed image digest, for example

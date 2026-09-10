@@ -1,0 +1,39 @@
+# Applied once by a cluster administrator, NEVER by the deployment workflow.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hubspot-proxy-deployer
+  namespace: hubspot-proxy-demo
+rules:
+  - apiGroups: [""]
+    resources: [services, configmaps, secrets]
+    verbs: [get, create, patch, update]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, patch, update]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, create, patch, update]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, list, watch, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hubspot-proxy-deployer
+  namespace: hubspot-proxy-demo
+subjects:
+  - kind: Group
+    name: springmath-hubspot-proxy-deploy
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: hubspot-proxy-deployer
+  apiGroup: rbac.authorization.k8s.io

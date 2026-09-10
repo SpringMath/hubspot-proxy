@@ -74,7 +74,7 @@ test('lists only exclusive same-ticket notes and projects away raw vendor metada
     id: '2', archived: false, createdAt: TIME, updatedAt: TIME,
     properties: { hs_timestamp: TIME, hs_note_body: `<p>${write.body}</p>` },
     associations: { tickets: { results: [{ id: '1', type: 'note_to_ticket' }] } },
-  }] } })
+  }], notesWithheld: false } })
   assert.ok(!JSON.stringify(result).includes('MUST_NOT_LEAK'))
   const reads = calls.filter(call => call.url.pathname.startsWith(`${NOTES}/`))
   assert.deepEqual(reads.map(call => call.url.searchParams.get('properties')), ['hs_timestamp', 'hs_timestamp,hs_note_body'])
@@ -84,7 +84,11 @@ test('lists only exclusive same-ticket notes and projects away raw vendor metada
 
 test('creates only a native note with one server-selected ticket association and no summary or email changes', async () => {
   const { broker, calls } = fixture()
-  assert.deepEqual(await broker.handle({ method: 'POST', url: ROUTE, body: write }), { status: 201, body: { id: '2' } })
+  assert.deepEqual(await broker.handle({ method: 'POST', url: ROUTE, body: write }), { status: 201, body: { id: '2', note: {
+    id: '2', archived: false, createdAt: TIME, updatedAt: TIME,
+    properties: { hs_timestamp: TIME, hs_note_body: `<p>${write.body}</p>` },
+    associations: { tickets: { results: [{ id: '1', type: 'note_to_ticket' }] } },
+  } } })
   const posts = calls.filter(call => call.method === 'POST')
   assert.equal(posts.length, 1)
   assert.equal(posts[0].url.pathname, NOTES)
@@ -166,11 +170,12 @@ test('rejects stale note approval without POST', async () => {
   assert.ok(calls.every(call => call.method === 'GET'))
 })
 
-for (const associations of [undefined, {}, { tickets: { results: [] } }, { tickets: { results: [{ id: '99' }] } },
-  { tickets: { results: [{ id: '1' }, { id: '99' }] } }, { tickets: { results: [{ id: '1' }], paging: { next: { after: '1' } } } },
-  { tickets: note().associations.tickets, contacts: { results: [{ id: '9' }] } },
-  { tickets: note().associations.tickets, companies: { results: [{ id: '9' }] } },
-  { tickets: note().associations.tickets, deals: { results: [{ id: '9' }] } },
+for (const associations of [undefined, {},
+  { tickets: { results: [{ id: '1' }], paging: { next: { after: '1' } } } },
+  { tickets: note().associations.tickets, contacts: { results: [{ id: '../foreign' }] } },
+  { tickets: note().associations.tickets, contacts: { results: [null] } },
+  { tickets: note().associations.tickets, contacts: { results: [{ id: '9' }, { id: '9' }] } },
+  { tickets: note().associations.tickets, contacts: { results: [{ id: '9' }] }, deals: { results: [], paging: {} } },
   { tickets: note().associations.tickets, other: { results: [] } },
 ]) {
   test(`does not retrieve note body if note lacks exclusive same-ticket binding ${JSON.stringify(associations)}`, async () => {
@@ -181,6 +186,87 @@ for (const associations of [undefined, {}, { tickets: { results: [] } }, { ticke
     assert.equal(noteCalls[0].url.searchParams.get('properties'), 'hs_timestamp')
   })
 }
+
+for (const associations of [
+  { tickets: { results: [] } }, { tickets: { results: [{ id: '99' }] } },
+  { tickets: { results: [{ id: '1' }, { id: '99' }] } },
+  { tickets: note().associations.tickets, contacts: { results: [{ id: '9' }] } },
+  { tickets: note().associations.tickets, companies: { results: [{ id: '9' }] } },
+  { tickets: note().associations.tickets, deals: { results: [{ id: '9' }] } },
+]) {
+  test(`withholds a definitively cross-record note without retrieving its body ${JSON.stringify(associations)}`, async () => {
+    const { broker, calls } = fixture({}, call => call.url.pathname === `${NOTES}/2` ? json({ ...note(), associations }) : undefined)
+    assert.deepEqual(await broker.handle({ method: 'GET', url: ROUTE }), { status: 200, body: { results: [], notesWithheld: true } })
+    const noteCalls = calls.filter(call => call.url.pathname.startsWith(`${NOTES}/`))
+    assert.equal(noteCalls.length, 1)
+    assert.equal(noteCalls[0].url.searchParams.get('properties'), 'hs_timestamp')
+  })
+}
+
+test('returns permitted notes with a presence-only notice but never foreign IDs or counts', async () => {
+  const { broker, calls } = fixture({}, call => {
+    if (call.url.pathname === `${TICKETS}/1/associations/notes`) return json({ results: [{ id: '2' }, { id: '900000' }] })
+    if (call.url.pathname === `${NOTES}/900000`) return json({ ...note('900000'), associations: {
+      tickets: note().associations.tickets, contacts: { results: [{ id: '9999999' }] },
+    } })
+  })
+  const result = await broker.handle({ method: 'GET', url: ROUTE })
+  assert.equal(result.body.notesWithheld, true)
+  assert.deepEqual(result.body.results.map(row => row.id), ['2'])
+  assert.ok(!/900000|9999999|count/i.test(JSON.stringify(result)))
+  assert.equal(calls.filter(call => call.url.pathname === `${NOTES}/900000`).length, 1)
+})
+
+test('uses at most three concurrent per-note reads through the fifty-note bound', async () => {
+  let active = 0
+  let peak = 0
+  const boundaries = new Set()
+  const { broker } = fixture({}, async call => {
+    if (call.url.pathname === `${TICKETS}/1/associations/notes`) return json({ results: Array.from({ length: 50 }, (_, index) => ({ id: String(index + 1) })) })
+    if (call.url.pathname.startsWith(`${NOTES}/`)) {
+      const id = call.url.pathname.split('/').at(-1)
+      if (call.url.searchParams.get('properties').includes('hs_note_body')) assert.ok(boundaries.has(id))
+      else boundaries.add(id)
+      active++; peak = Math.max(peak, active)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      active--
+      return json(note(id))
+    }
+  })
+  const result = await broker.handle({ method: 'GET', url: ROUTE })
+  assert.equal(result.body.results.length, 50)
+  assert.equal(result.body.notesWithheld, false)
+  assert.equal(peak, 3)
+  assert.equal(active, 0)
+})
+
+test('confirms a created note directly even when its ticket has more than fifty notes', async () => {
+  const { broker, calls } = fixture({}, call => {
+    if (call.url.pathname === `${TICKETS}/1/associations/notes`) return json({ results: Array.from({ length: 51 }, (_, index) => ({ id: String(index + 1) })), paging: { next: { after: '52' } } })
+  })
+  const result = await broker.handle({ method: 'POST', url: ROUTE, body: write })
+  assert.equal(result.body.id, '2')
+  assert.equal(result.body.note.id, '2')
+  assert.ok(!calls.some(call => call.url.pathname === `${TICKETS}/1/associations/notes`))
+})
+
+test('bounds cumulative response bytes across concurrent notes including discarded JSON whitespace', async () => {
+  const { broker } = fixture({}, call => {
+    if (call.url.pathname === `${TICKETS}/1/associations/notes`) return json({ results: Array.from({ length: 10 }, (_, index) => ({ id: String(index + 1) })) })
+    if (call.url.pathname.startsWith(`${NOTES}/`)) return new Response(' '.repeat(1000000) + JSON.stringify(note(call.url.pathname.split('/').at(-1))), { headers: { 'Content-Type': 'application/json' } })
+  })
+  await reject(() => broker.handle({ method: 'GET', url: ROUTE }), 503, 'QUERY_BOUND_EXCEEDED')
+})
+
+test('never returns a partial successful list when another note has malformed association metadata', async () => {
+  const { broker } = fixture({}, call => {
+    if (call.url.pathname === `${TICKETS}/1/associations/notes`) return json({ results: [{ id: '2' }, { id: '3' }] })
+    if (call.url.pathname === `${NOTES}/3`) return json({ ...note('3'), associations: {
+      tickets: note().associations.tickets, contacts: { results: [{ id: '9' }] }, deals: { results: [], paging: {} },
+    } })
+  })
+  await reject(() => broker.handle({ method: 'GET', url: ROUTE }), 404, 'NOT_FOUND')
+})
 
 for (const page of [{}, { results: [{ id: '../foreign' }] }, { results: [{ id: '2' }, { id: '2' }] },
   { results: [{ id: '2' }], paging: { next: { after: '1' } } },

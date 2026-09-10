@@ -5,6 +5,7 @@ const CONTACTS = '/crm/v3/objects/contacts'
 const NOTES = '/crm/v3/objects/notes'
 const NOTE_ASSOCIATIONS = ['tickets', 'contacts', 'companies', 'deals']
 const MAX_NOTES = 50
+const MAX_CONCURRENT_NOTES = 3
 const ID = /^[0-9]{1,30}$/
 const validId = value => typeof value === 'string' && ID.test(value)
 const EXTERNAL_ID = /^[a-zA-Z0-9_-]{8,160}$/
@@ -377,13 +378,18 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     // Notes shared with any other ticket or standard CRM record are deliberately
     // withheld. Missing association pages mean empty; an absent tickets page does
     // not prove ownership. The broker never exposes generic note-ID access.
+    let eligible = true
     for (const [kind, page] of Object.entries(row.associations)) {
       if (!NOTE_ASSOCIATIONS.includes(kind) || !isObject(page) || !Array.isArray(page.results)
-        || (page.paging !== undefined && page.paging !== null)) missing()
+        || (page.paging !== undefined && page.paging !== null)
+        || page.results.some(record => !isObject(record) || !validId(record.id))
+        || new Set(page.results.map(record => record.id)).size !== page.results.length) missing()
       if (kind === 'tickets') {
-        if (page.results.length !== 1 || page.results[0]?.id !== ticketId) missing()
-      } else if (page.results.length) missing()
+        if (page.results.length !== 1 || page.results[0]?.id !== ticketId) eligible = false
+      } else if (page.results.length) eligible = false
     }
+    // Do not turn a malformed later page into an apparently valid omission.
+    return eligible
   }
   function projectNote(row, ticketId) {
     const timestamp = row.properties?.hs_timestamp
@@ -397,13 +403,16 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
       associations: { tickets: { results: [{ id: ticketId, type: 'note_to_ticket' }] } },
     }
   }
-  async function readNote(noteId, ticketId, signal) {
+  async function readNote(noteId, ticketId, signal, withholdIneligible = false) {
     const params = new URLSearchParams({ archived: 'false', associations: NOTE_ASSOCIATIONS.join(','), properties: 'hs_timestamp' })
     const boundary = await upstream(`${NOTES}/${noteId}?${params}`, { signal, allow404: true })
-    noteBoundary(boundary, noteId, ticketId)
+    if (!noteBoundary(boundary, noteId, ticketId)) {
+      if (withholdIneligible) return null
+      missing()
+    }
     params.set('properties', 'hs_timestamp,hs_note_body')
     const row = await upstream(`${NOTES}/${noteId}?${params}`, { signal, allow404: true })
-    noteBoundary(row, noteId, ticketId)
+    if (!noteBoundary(row, noteId, ticketId)) missing()
     return projectNote(row, ticketId)
   }
   async function listNotes(id, signal) {
@@ -416,15 +425,27 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
     if (ids.some(id => !validId(id)) || new Set(ids).size !== ids.length) malformed()
     const results = []
     let totalBody = 0
-    for (const noteId of ids) {
-      const note = await readNote(noteId, id, signal)
-      totalBody += Buffer.byteLength(note.properties.hs_note_body)
-      if (totalBody > 200000) fail(503, 'QUERY_BOUND_EXCEEDED')
-      results.push(note)
-    }
+    let notesWithheld = false
+    let next = 0
+    let failed = false
+    let failure
+    await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_NOTES, ids.length) }, async () => {
+      while (!failed && next < ids.length) {
+        const noteId = ids[next++]
+        try {
+          const note = await readNote(noteId, id, signal, true)
+          if (!note) { notesWithheld = true; continue }
+          totalBody += Buffer.byteLength(note.properties.hs_note_body)
+          if (totalBody > 200000) fail(503, 'QUERY_BOUND_EXCEEDED')
+          results.push(note)
+        } catch (error) { if (!failed) failure = error; failed = true }
+      }
+    }))
+    if (failed) throw failure
     // Never return partial results after reassignment, archival or pagination.
     await readTicket(id, { props: boundary, signal })
-    return { results }
+    results.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    return { results, notesWithheld }
   }
   async function createNote(id, body, signal) {
     notesAllowed()
@@ -449,7 +470,9 @@ export function createBroker(config, { fetchImpl = fetch } = {}) {
       const note = await readNote(created.id, id, signal)
       if (note.properties.hs_note_body !== html) malformed()
       await readTicket(id, { props: boundary, signal })
-      return { id: note.id }
+      // Return the single verified created note rather than requiring a full
+      // history listing, which may exceed the bounded notes-list limit.
+      return { id: note.id, note }
     } catch { fail(502, 'WRITE_OUTCOME_UNKNOWN') }
   }
   function parseRoute(method, rawUrl) {

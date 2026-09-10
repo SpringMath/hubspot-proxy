@@ -26,6 +26,17 @@ would **not** fix the trust boundary.
 3. Start **read-only**; test synthetic allowed and denied tickets.
 4. Enable writes only after the account owner accepts the constraints below.
 
+SpringMath's Sydney demo uses [main-branch GitHub Actions deployment](docs/github-deployment.md)
+at `https://hubspotproxy.springmath.au`, with one small ARM64 pod, dedicated ECR
+repository and namespace-limited OIDC role. See that runbook for release status
+and required one-time setup; the existence of this URL is not proof of a rollout.
+
+For Ochre's HubSpot setup, see the [concrete record-boundary plan](docs/access-boundary.md):
+the exact custom fields, pipeline, requester/contact association, and dedicated
+inbox/thread rules. A shared contact never grants access to that person's
+other-brand records. Conversations/email isolation is planned and is **not yet
+implemented by this broker**; those routes remain denied.
+
 ```sh
 npm run check
 npm test
@@ -53,7 +64,7 @@ All business routes require `Authorization: Bearer <broker-token>`.
 | POST | `/crm/v3/objects/tickets` | Forces pipeline, marker and initial stage; privately ensures requester contact and verifies ticket association. |
 | PATCH | `/crm/v3/objects/tickets/{ticketId}` | Only the configured shared summary and allowlisted stage. |
 | DELETE | `/crm/v3/objects/tickets/{ticketId}` | HubSpot archive/recycling bin, not permanent deletion or resolution. |
-| GET | `/springmath/v1/tickets/{ticketId}/notes` | Optional native notes on this scoped ticket only; complete bounded list. |
+| GET | `/springmath/v1/tickets/{ticketId}/notes` | Optional permitted native notes on this scoped ticket; presence-only notice if cross-record notes were withheld. |
 | POST | `/springmath/v1/tickets/{ticketId}/notes` | Optional ticket-only internal note; exact account/freshness/body, never a customer email. |
 | GET | `/healthz`, `/readyz` | Minimal unauthenticated probes; readiness checks the pinned upstream account. |
 
@@ -88,12 +99,22 @@ POST body:
 }
 ```
 
-POST returns `201 {"id":"<note-id>"}` only after scoped read-back. The broker
+POST returns `201 {"id":"<note-id>","note":{...}}` only after scoped read-back.
+The `note` is the single freshly verified projected native record, not a full
+history list. This confirms creation independently of the 50-note listing cap.
+The broker
 constructs the native note-to-ticket association (228); caller associations,
 raw HTML, attachments, note IDs and arbitrary properties are not accepted.
-GET returns projected `{results:[...]}` native CRM note records, at most 50
-and 200KB of note HTML. Partial/paginated associations and notes linked to other
-tickets or known contacts/companies/deals are withheld. Use ticket-only notes:
+GET returns projected `{results:[...],notesWithheld:false}` native CRM note
+records, at most 50 and 200KB of raw UTF-8 note HTML. A complete association
+page proving a note links to other tickets or known contacts/companies/deals
+withholds that note **without fetching its body** and sets `notesWithheld:true`.
+The notice exposes no omitted IDs, counts or foreign record metadata; clients
+must not claim the returned notes are the full history. Malformed or paginated
+associations fail the entire read instead of returning a partial result.
+At most three per-note chains run concurrently, preserving metadata-before-body
+checks and final ticket scope rechecks within the existing 8MiB cumulative
+transfer budget. Use ticket-only notes:
 custom-object associations are not exhaustively discoverable by this adapter.
 
 These are shared staff notes, not private SpringMath engineering records or
@@ -198,10 +219,15 @@ unrestricted upstream token is permitted. See the [contract audit](docs/client-c
   reply-thread, permissions and notification workflows. CRM success is not proof
   of email delivery. See the [proposed communication policy](docs/customer-communications.md).
 
-Upstream scopes: `tickets`, plus `crm.objects.contacts.read` and
-`crm.objects.contacts.write` for requester association. Required ticket-property
-metadata must be readable. Do not grant unrelated marketing scopes to this key.
-Extra upstream privilege never automatically becomes a broker route.
+Upstream scopes for the complete planned workflow: `tickets`,
+`crm.objects.contacts.read`, `crm.objects.contacts.write`, `conversations.read`
+and `conversations.write`. Contact permissions support private requester
+association and native CRM notes. The Conversations scopes prepare for the
+future ticket-bound email adapter; the current broker still denies those routes.
+Required ticket-property metadata must be readable. No schema-write or unrelated
+marketing scopes are needed at runtime. Extra upstream privilege never
+automatically becomes a broker route. See the [scope-by-purpose table and
+implemented-versus-planned boundaries](docs/access-boundary.md).
 
 ## Verification and release
 
@@ -210,10 +236,12 @@ does not send emails or mutate HubSpot. Tests cover scope bypasses, OR filters,
 stale results, archive paging, response minimization, denied routes/properties,
 requester association, unknown write outcomes, bearer handling and resource limits.
 
-CI checks syntax, tests, renders Kubernetes, and builds the container. Image
-publication is manual; no workflow deploys to a cluster. Require review—including
-Claude approval as requested—before merging/releasing. A passing test is not a
-security assessment or confirmation of an installed Ochre deployment.
+CI checks syntax, tests, renders Kubernetes, and builds the container. Merged
+`main` pushes trigger the AU deployment workflow after it verifies formal Claude
+approval and an identical reviewed source tree. Direct unreviewed pushes cannot
+deploy. Optional GHCR publication remains manual; AU uses its own ECR registry.
+See [GitHub deployment and rollback](docs/github-deployment.md). A passing test
+is not a security assessment or confirmation of an installed Ochre deployment.
 
 Official API references: [HubSpot tickets](https://developers.hubspot.com/docs/api-reference/legacy/crm/objects/tickets/guide),
 [CRM search](https://developers.hubspot.com/docs/api-reference/legacy/crm/search-the-crm),

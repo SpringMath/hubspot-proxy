@@ -308,6 +308,38 @@ association IDs is unnecessary disclosure.
 
 ## Smallest future client changes
 
+### Native notes contract addendum
+
+The portal native-communications follow-up now implements a server-configured
+broker origin and the gated ticket-bound notes route. It has not redirected
+production clients by itself. Generic notes, note-ID reads, association APIs
+and all Conversations/email routes remain denied at the broker boundary.
+
+- `GET /springmath/v1/tickets/{ticketId}/notes` returns
+  `{results: NoteRecord[], notesWithheld: boolean}`. Each projected record has
+  `id`, `archived:false`, valid `createdAt`/`updatedAt`,
+  `properties.hs_timestamp`/`properties.hs_note_body`, and a single
+  `associations.tickets.results` entry for the requested ticket. The portal
+  independently validates these fields and renders HTML as untrusted plain text.
+- `notesWithheld:true` means complete association metadata identified at least
+  one ineligible cross-record note; its body is never fetched. No withheld IDs,
+  counts or foreign metadata are returned. Do not claim complete history or no
+  notes when the flag is true. Malformed/paginated metadata aborts the whole read.
+- Listing inspects at most 50 note IDs, with three concurrent per-note chains,
+  an 8MiB cumulative response budget and 200KB raw UTF-8 note body budget. It
+  checks metadata before bodies, rechecks associations with content, then
+  rechecks the parent scope. These are bounded reads, not atomic ownership locks.
+- `POST` takes only `{accountId, expectedUpdatedAt, body}` and returns
+  `201 {id, note}` after reading back that one exact created note, verifying its
+  approved body/ticket-only association and rechecking the parent. The portal
+  verifies the supplied note and rechecks parent scope too. It does not list all
+  historical notes to confirm creation, so an older ticket's listing cap cannot
+  turn a verified create into a false uncertainty.
+- Deploy matching portal/broker versions before enabling notes: missing
+  `notesWithheld` or the verified POST `note` fails closed in the portal.
+
+### Original ticket/contact adapter recommendations
+
 These are recommendations only; no existing app/portal source was changed by
 this audit.
 

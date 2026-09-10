@@ -39,6 +39,10 @@ investigation summary for cross-team work.
 
 1. Review/deploy the implemented native note routes with the flag off initially;
    they verify parent scope and ticket-only standard-record associations.
+   Lists return `notesWithheld:true` when cross-record notes were deliberately
+   omitted without fetching their bodies. Say that some notes were withheld;
+   never describe that result as a complete or empty ticket history. Malformed
+   or incomplete association metadata still fails the entire read.
 2. Review/deploy the portal's distinct approval-gated **Add internal note** and
    **Send customer reply** tools. Saved role allowlists require deliberate
    new-tool activation; a summary edit never silently becomes either action.

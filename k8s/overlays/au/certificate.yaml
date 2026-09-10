@@ -1,0 +1,14 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: hubspot-proxy-tls
+  namespace: hubspot-proxy-demo
+spec:
+  secretName: hubspot-proxy-tls
+  duration: 2160h
+  renewBefore: 720h
+  issuerRef:
+    name: letsencrypt-dns01-production
+    kind: ClusterIssuer
+  dnsNames:
+    - hubspotproxy.springmath.au

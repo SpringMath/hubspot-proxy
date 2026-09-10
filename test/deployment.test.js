@@ -277,6 +277,44 @@ test('Claude workflow requires a genuine current-head formal review rather than 
   for (const value of ["latest?.state === 'APPROVED'", 'latest.commit_id === pr.head.sha', "review.user?.login === 'claude[bot]'",
     'REVIEW_STARTED_AT', deployment.marker, 'secrets.ANTHROPIC_API_KEY', 'head.repo.full_name == github.repository']) assert.ok(workflow.includes(value), value)
 })
+test('AU OIDC trust is restricted to immutable repository IDs, the demo environment and STS audience', () => {
+  const trust = JSON.parse(readFileSync(new URL('../k8s/bootstrap/au-oidc-trust.json', import.meta.url), 'utf8'))
+  assert.deepEqual(trust, {
+    Version: '2012-10-17',
+    Statement: [{
+      Effect: 'Allow',
+      Principal: { Federated: 'arn:aws:iam::975774911479:oidc-provider/token.actions.githubusercontent.com' },
+      Action: 'sts:AssumeRoleWithWebIdentity',
+      Condition: { StringEquals: {
+        'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+        'token.actions.githubusercontent.com:sub': 'repo:SpringMath@219569131/hubspot-proxy@1364220697:environment:australia-demo'
+      } }
+    }]
+  })
+})
+test('deployment checks the actual AWS account before ECR and fails closed on wrong, empty or failed STS results', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy-au.yml', import.meta.url), 'utf8')
+  assert.doesNotMatch(workflow, /allowed-account-ids:/)
+  const step = workflow.match(/      - name: Verify the assumed AWS account before accessing ECR or EKS\n        shell: bash\n        run: \|\n((?:          .*\n)+)/)
+  assert.ok(step, 'Account guard must run in bash')
+  assert.ok(workflow.indexOf('aws-actions/configure-aws-credentials@') < step.index)
+  assert.ok(step.index < workflow.indexOf('aws-actions/amazon-ecr-login@'))
+  const script = step[1].replace(/^          /gm, '')
+  for (const [account, stsStatus, expectedStatus] of [
+    ['975774911479', 0, 0], ['000000000000', 0, 1], ['', 0, 1], ['975774911479', 1, 1]
+  ]) {
+    const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', `
+      aws() {
+        [[ "$*" == 'sts get-caller-identity --query Account --output text' ]] || return 2
+        printf '%s\\n' "$BROKER_TEST_ACCOUNT"
+        return "$BROKER_TEST_STS_STATUS"
+      }
+      ${script}
+    `], { encoding: 'utf8', env: { PATH: process.env.PATH, BROKER_TEST_ACCOUNT: account, BROKER_TEST_STS_STATUS: String(stsStatus) } })
+    assert.equal(result.error, undefined)
+    assert.equal(result.status, expectedStatus, `account=${account}, STS status=${stsStatus}: ${result.stderr}`)
+  }
+})
 function reviewWorkflowJob(workflow, name) {
   const marker = `  ${name}:\n`
   const start = workflow.indexOf(marker)

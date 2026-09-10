@@ -18,7 +18,19 @@ itself namespace, cluster, IAM, DNS-provider or certificate-issuer privileges.
    `975774911479`, region `ap-southeast-2`, with immutable image tags.
 2. Create IAM role `hubspot-proxy-github-deploy-au`. Its OIDC trust must require
    `aud=sts.amazonaws.com` and exactly
-   `sub=repo:SpringMath/hubspot-proxy:environment:australia-demo`.
+   `sub=repo:SpringMath@219569131/hubspot-proxy@1364220697:environment:australia-demo`.
+   This repository uses [GitHub's immutable subject format](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims),
+   enabled by default for repositories created after July 15, 2026.
+   As a **repository administrator**, verify the current configuration with
+   `gh api repos/SpringMath/hubspot-proxy/actions/oidc/customization/sub`;
+   this repository returns `use_default: true`, `use_immutable_subject: true`,
+   and `sub_claim_prefix: "repo:SpringMath@219569131/hubspot-proxy@1364220697"`.
+   Append `:environment:australia-demo` only for that verified default prefix.
+   If the response differs or access is denied, stop and inspect the actual
+   subject in the AWS CloudTrail STS event; do not guess from repository names.
+   Keep the exact environment suffix and subject, not a wildcard.
+   The successful September 10, 2026 deployment's STS subject and API response
+   are recorded in [PR #5](https://github.com/SpringMath/hubspot-proxy/pull/5).
    Grant ECR push/pull only for the dedicated broker repository,
    `ecr:GetAuthorizationToken` on `*`, and `eks:DescribeCluster` for
    `arn:aws:eks:ap-southeast-2:975774911479:cluster/springmath-au`.
@@ -94,7 +106,10 @@ branch fell behind, update it, obtain review again and merge the new head.
 
 1. Runs Node syntax checks and all contract/security tests, then verifies the
    merged PR and exact reviewed source tree before acquiring AWS credentials.
-2. Uses GitHub OIDC for the broker-only IAM role; no static AWS secret is used.
+2. Uses GitHub OIDC for the broker-only IAM role and verifies AWS account
+   `975774911479` before ECR/EKS access; no static AWS secret is used. The pinned
+   credentials action does not support `allowed-account-ids`, so an explicit
+   STS identity check provides defense in depth alongside the pinned role ARN.
 3. Builds native ARM64 for Sydney's ARM64 nodes, pushes ECR, and deploys by
    immutable registry digest, not a moving tag.
 4. Renders `k8s/overlays/au` with a purely local, empty JSON Patch and kubectl's

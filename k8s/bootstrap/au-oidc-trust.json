@@ -6,7 +6,7 @@
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {"StringEquals": {
       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-      "token.actions.githubusercontent.com:sub": "repo:SpringMath/hubspot-proxy:environment:australia-demo"
+      "token.actions.githubusercontent.com:sub": "repo:SpringMath@219569131/hubspot-proxy@1364220697:environment:australia-demo"
     }}
   }]
 }

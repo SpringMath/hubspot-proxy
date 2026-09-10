@@ -8,7 +8,7 @@ gives SpringMath only the broker bearer token**. Ochre also owns the deployment,
 secret store, policy configuration, logs, and administrative access.
 
 This is a deliberately limited HubSpot-shaped support API, not an unrestricted
-HTTP proxy. Review the [README](../README.md) endpoint contract before connecting
+HTTP proxy. Review the [API contract](api-and-security.md) before connecting
 an existing client. Do not redirect a general-purpose HubSpot integration here.
 
 The optional [SpringMath Sydney deployment](github-deployment.md) uses the
@@ -146,7 +146,7 @@ notifications, every HubSpot scope, or business workflow has been configured.
 It should fail closed for invalid credentials or an unexpected account. Liveness
 does not require HubSpot to be available.
 
-Use the README's endpoint examples for ticket reads. For real credentials, keep
+Use the API contract's endpoint examples for ticket reads. For real credentials, keep
 the Authorization header in a permissions-`0600` curl config outside the repo,
 then pass `curl --config /secure/path/broker-curl.conf ...`. Avoid `curl -v`,
 request tracing, or printing customer ticket bodies into shared terminals.

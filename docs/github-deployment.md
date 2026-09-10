@@ -101,9 +101,8 @@ branch fell behind, update it, obtain review again and merge the new head.
    temp files, CLI arguments or last-applied-configuration copies are created.
    Child processes do not inherit the application/review token environment.
    Failure diagnostics intentionally omit submitted Secret contents.
-6. Applies the validated resources with the exact image/revision fields replaced
-   to only the broker
-   namespace resources. A commit/run/attempt annotation restarts pods even when
+6. Applies the validated List to the dedicated broker namespace, with the exact
+   image/revision fields already replaced. A commit/run/attempt annotation restarts pods even when
    the same commit is dispatched after a secret or configuration change.
 7. Waits for rollout and the certificate, then checks public TLS, `/healthz`,
    `/readyz` and an unauthenticated **401** for `/account-info/v3/details`.

@@ -285,6 +285,20 @@ function reviewWorkflowJob(workflow, name) {
   const next = remainder.search(/^  [a-zA-Z0-9_-]+:\s*$/m)
   return next === -1 ? remainder : remainder.slice(0, next)
 }
+test('new PR pushes cancel obsolete Claude analysis without skipping the fail-closed approval gate', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/claude-pr-review.yml', import.meta.url), 'utf8')
+  assert.match(workflow, /concurrency:\n  group: broker-claude-\$\{\{ github\.event\.pull_request\.number \}\}\n  cancel-in-progress: true/)
+  const analysis = reviewWorkflowJob(workflow, 'claude-analysis')
+  assert.match(analysis, /^    if: \$\{\{ !cancelled\(\) && github\.event\.pull_request\.draft == false && github\.event\.pull_request\.head\.repo\.full_name == github\.repository \}\}\s*$/m)
+  assert.doesNotMatch(analysis, /always\(\)|success\(\)/)
+  assert.match(analysis, /^    needs: repository-tests\s*$/m)
+  const gate = reviewWorkflowJob(workflow, 'claude-review')
+  assert.match(gate, /^    if: always\(\)\s*$/m)
+  assert.ok(gate.includes("process.env.ANALYSIS_JOB_RESULT !== 'success'"))
+  assert.ok(gate.includes("process.env.TEST_OUTCOME !== 'success'"))
+  assert.ok(gate.includes("latest?.state === 'APPROVED'"))
+  assert.ok(gate.includes('latest.commit_id === pr.head.sha'))
+})
 test('Claude approval gate runs even when fork analysis is skipped and never receives secrets or repository code', () => {
   const workflow = readFileSync(new URL('../.github/workflows/claude-pr-review.yml', import.meta.url), 'utf8')
   const analysis = reviewWorkflowJob(workflow, 'claude-analysis')

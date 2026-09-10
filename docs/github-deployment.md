@@ -76,6 +76,14 @@ requires a **formal `claude[bot]` APPROVED review on the exact current head**,
 created during that run with `<!-- claude-code-review:v1 -->` in its body.
 Address requested changes and obtain a new approval after each material push.
 
+New pushes cancel older reviews for the same PR. The long-running analysis uses
+`!cancelled()` so it can review failed test results without surviving cancellation.
+The short, secret-free approval gate retains `always()` to reject failed/skipped
+analysis and anything other than a fresh approval on the exact current head.
+Runs started before this fix retain their old cancellation behavior; if one blocks
+the queue, an operator may force-cancel that obsolete run after confirming its
+head is no longer current. No approval or deployment check should be bypassed.
+
 The deployment preflight independently verifies that the deployed main commit
 is a merged PR, its latest formal Claude review approves the current head, and
 the entire Git tree is identical to that reviewed head. Squash merges work;

@@ -51,8 +51,11 @@ Host/storage administrators remain trusted and can defeat filesystem guarantees.
 
 - `GET /springmath/v1/tickets/{ticketId}/reply-context` returns a bounded preview,
   verified `to`/`from`/`subject`, `ticketUpdatedAt`, `contextVersion` and
-  `dispatchVersion`. Content is explicitly untrusted; contact/actor/channel IDs
-  and unrelated metadata are withheld.
+  `dispatchVersion`, plus the literal `requesterIncomingVerified:true`. Clients
+  must require this proof: the broker verified an incoming email from the exact
+  requester over the complete bounded history, including its final freshness
+  recheck. The last 20 preview messages may all be outgoing. Content remains
+  untrusted; contact/actor/channel IDs and unrelated metadata are withheld.
 - `POST /springmath/v1/tickets/{ticketId}/replies` accepts only
   `{accountId, expectedUpdatedAt, contextVersion, to, from, subject, body}`.
   Routing is re-derived and compared with the approved preview, not trusted from
@@ -65,12 +68,17 @@ email thread, and at least one incoming email from that requester. CC/BCC,
 multiple recipients/threads, paginated or oversized histories, mismatched
 ownership and malformed vendor data fail closed. At most 100 messages/200KB of
 text are inspected; previews show the last 20, up to 2,000 characters each.
+The proof is bound into `contextVersion`, not the email-ID-set `dispatchVersion`.
+It is response-only; do not include it in the POST body. Upgrading the broker
+invalidates older context approvals without changing existing dispatch claims.
 
 `REPLY_CONTEXT_UNAVAILABLE` means the safe reply prerequisites are not met.
 `STALE_APPROVAL` requires a fresh preview and approval.
 `REPLY_DISPATCH_ALREADY_RESERVED` or `WRITE_OUTCOME_UNKNOWN` requires read-only
 reconciliation; **never automatically retry**. `REPLY_RESERVATION_UNAVAILABLE`
-means sending is unavailable until durable storage is healthy.
+means sending is unavailable until durable storage is healthy. With replies
+enabled, unhealthy storage also fails broker readiness, removing the pod from
+Service traffic for all routes until storage recovers.
 
 ## First test
 

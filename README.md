@@ -9,7 +9,7 @@ SpringMath app + portal → Ochre broker → Ochre HubSpot
     broker token           HubSpot key stays here
 ```
 
-Supports ticket search, creation, updates, handoffs, resolution, archiving and optional internal notes. Contact association is handled privately. **Conversation reads and email replies are not implemented.** This is a restricted API, not a drop-in proxy for every HubSpot endpoint.
+Supports ticket search, creation, updates, handoffs, resolution, archiving, optional internal notes and ticket-bound email replies. Contact association is handled privately. Replies need an existing verified email thread and persistent duplicate-send storage. This is a restricted API, not a drop-in proxy for every HubSpot endpoint.
 
 ## Install on Kubernetes
 
@@ -28,7 +28,7 @@ npm test
 
 Use the repository’s [HubSpot setup instructions](docs/access-boundary.md#exact-setup-inside-hubspot) as the authoritative reference; the [screenshot guide](https://springmath-hubspot-service-key-guide.tim-heckel419739.chatgpt.site) is an optional visual aid.
 
-For the implemented ticket/contact workflow, grant `tickets`, `crm.objects.contacts.read` and `crm.objects.contacts.write`. The `conversations.read` and `conversations.write` scopes are only for the future, unimplemented email adapter—not required today. See the [scope table](docs/access-boundary.md#service-key-scopes). Select a SpringMath pipeline and create these ticket properties:
+Grant `tickets`, `crm.objects.contacts.read` and `crm.objects.contacts.write`; add `conversations.read` and `conversations.write` for email replies. See the [scope table](docs/access-boundary.md#service-key-scopes). Select a SpringMath pipeline and create these ticket properties:
 
 | Property | Type / value |
 | --- | --- |
@@ -89,6 +89,8 @@ For authenticated tests, keep the bearer header in a permissions-`0600` curl con
 Otherwise set `BROKER_SCOPE_IS_IMMUTABLE=true`, `BROKER_ENABLE_WRITES=true` and optionally `BROKER_ENABLE_NOTES=true` in `k8s/base/configmap.yaml`; reapply manifests and restart the deployment, because running pods do not refresh environment variables in place.
 
 Give SpringMath the HTTPS broker URL and broker token. **Both app and portal backends need the broker-compatible adapter; changing only the hostname is insufficient.** Verify the complete handoff before going live. Customer emails require separate HubSpot configuration.
+
+For customer replies, follow the [email and persistent-storage setup](docs/replies.md). Generic conversation/contact endpoints remain denied. Both backends use `HUBSPOT_SUPPORT_API_BASE_URL`, `HUBSPOT_SUPPORT_BROKER_REQUIRED=true` and the separate `HUBSPOT_SUPPORT_BROKER_TOKEN`; never give them the upstream key.
 
 ## Details
 

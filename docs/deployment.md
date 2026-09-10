@@ -284,7 +284,8 @@ After read-only isolation tests and the required review, set
 synthetic tickets until Ochre approves the production integration. Ticket create,
 stage update, summary update, and archive requests are real upstream operations.
 Changing ticket status can trigger HubSpot automation configured by the owner;
-the broker does not send email or guarantee delivery.
+the optional reply adapter submits native email through HubSpot, but does not
+guarantee delivery. Replies require [persistent dispatch storage](replies.md).
 
 Account owners must separately approve the customer-facing emails and recipient
 associations. Do not email internal investigation notes or every team handoff.

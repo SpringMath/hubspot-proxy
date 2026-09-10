@@ -54,8 +54,8 @@ and required one-time setup; the existence of this URL is not proof of a rollout
 For Ochre's HubSpot setup, see the [concrete record-boundary plan](access-boundary.md):
 the exact custom fields, pipeline, requester/contact association, and dedicated
 inbox/thread rules. A shared contact never grants access to that person's
-other-brand records. Conversations/email isolation is planned and is **not yet
-implemented by this broker**; those routes remain denied.
+other-brand records. Optional [ticket-bound email replies](replies.md) verify the
+requester, ticket/thread association, inbox, channel and participants privately.
 
 The [Kubernetes manifests](../k8s/) start with a private ClusterIP service; the
 default installation has no public endpoint and writes are disabled.
@@ -79,6 +79,8 @@ All business routes require `Authorization: Bearer <broker-token>`.
 | DELETE | `/crm/v3/objects/tickets/{ticketId}` | HubSpot archive/recycling bin, not permanent deletion or resolution. |
 | GET | `/springmath/v1/tickets/{ticketId}/notes` | Optional permitted native notes on this scoped ticket; presence-only notice if cross-record notes were withheld. |
 | POST | `/springmath/v1/tickets/{ticketId}/notes` | Optional ticket-only internal note; exact account/freshness/body, never a customer email. |
+| GET | `/springmath/v1/tickets/{ticketId}/reply-context` | Optional bounded preview from one verified native email thread; private routing metadata withheld. |
+| POST | `/springmath/v1/tickets/{ticketId}/replies` | Optional approved reply, freshly derived routing and persistent exclusive dispatch reservation. |
 | GET | `/healthz`, `/readyz` | Minimal unauthenticated probes; readiness checks the pinned upstream account. |
 
 Foreign and missing tickets have the same `404 NOT_FOUND` response. Unknown
@@ -91,7 +93,7 @@ include arbitrary upstream extensions, history, vendor links or contact IDs.
 
 **Not exposed:** contacts lookup/search/edit, arbitrary associations, batch APIs,
 companies, deals, schemas, pipeline mutations, restore/permanent delete, generic notes,
-email/conversations APIs, marketing data, or arbitrary URLs. The broker uses a
+generic email/conversations APIs, marketing data, or arbitrary URLs. The broker uses a
 few of those APIs internally for bounded checks; they are not caller routes.
 
 ### Optional native internal notes
@@ -132,13 +134,17 @@ custom-object associations are not exhaustively discoverable by this adapter.
 
 These are shared staff notes, not private SpringMath engineering records or
 email messages. The portal's durable dispatch reservation guards approval
-replays; this stateless broker does **not** promise idempotent note POSTs.
+replays; the broker does **not** promise idempotent note POSTs.
 Never automatically retry an uncertain create. The ownership immutability
 constraint below also applies to note associations.
 
-Native customer email needs a ticket-bound Conversations adapter, which is
-**not exposed by this broker yet**. The portal's direct-HubSpot demo implementation
-refuses email sending when configured with a broker origin.
+### Optional customer replies
+
+`BROKER_ENABLE_REPLIES=false` by default. [Reply setup and contract](replies.md)
+cover the pinned inbox/channel/agent, one verified ticket-linked email thread,
+approved recipient/content, persistent dispatch reservations and readback.
+Generic Conversations endpoints remain denied. The portal's broker adapter uses
+only the two ticket-bound reply routes; it never falls back to direct HubSpot.
 
 ### Search, counts and pagination
 
@@ -228,19 +234,20 @@ unrestricted upstream token is permitted. See the [contract audit](client-contra
 - Every holder of this initial broker service token can invoke its permitted
   operations. User/role/approval enforcement remains in the trusted portal/app.
   A separate role-specific credential model is future work, not an existing claim.
-- The broker is not an email sender. HubSpot must own the sender, recipient,
+- The broker submits native email replies through HubSpot, not its own SMTP.
+  HubSpot must own the sender, recipient,
   reply-thread, permissions and notification workflows. CRM success is not proof
   of email delivery. See the [proposed communication policy](customer-communications.md).
 
-Upstream scopes for the complete planned workflow: `tickets`,
+Upstream scopes for the complete workflow: `tickets`,
 `crm.objects.contacts.read`, `crm.objects.contacts.write`, `conversations.read`
 and `conversations.write`. Contact permissions support private requester
-association and native CRM notes. The Conversations scopes prepare for the
-future ticket-bound email adapter; the current broker still denies those routes.
+association and native CRM notes. Conversations scopes support the optional
+ticket-bound email adapter; generic conversation routes remain denied.
 Required ticket-property metadata must be readable. No schema-write or unrelated
 marketing scopes are needed at runtime. Extra upstream privilege never
 automatically becomes a broker route. See the [scope-by-purpose table and
-implemented-versus-planned boundaries](access-boundary.md).
+record boundaries](access-boundary.md).
 
 ## Verification and release
 

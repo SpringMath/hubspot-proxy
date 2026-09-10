@@ -6,6 +6,13 @@ The `Deploy AU broker` workflow deploys reviewed pushes to `main` to
 The upstream account remains SpringMath's **50288738** test account; do not put
 Ochre's unrestricted HubSpot token in SpringMath infrastructure.
 
+The AU overlay enables writes, notes and replies only for the controlled
+synthetic pipeline/marker. Keep ticket ownership, requester/thread associations
+and mailbox routing fixed while enabled; disable broker access before changing
+them. Ordinary allowed stage transitions are permitted. This operational freeze
+does not add an atomic HubSpot authorization guarantee. The portable base
+configuration remains read-only by default.
+
 ## One-time administrator setup
 
 Bootstrap manifests and IAM policies are in `k8s/bootstrap/`. The reusable
@@ -65,6 +72,15 @@ itself namespace, cluster, IAM, DNS-provider or certificate-issuer privileges.
    `letsencrypt-dns01-production` issuer can reconcile the reviewed AU Ingress
    and Certificate. This workflow stores no Cloudflare token and changes no
    global controller or issuer configuration.
+7. Before the reply-capable AU rollout, apply the dedicated persistent claim:
+
+   ```sh
+   kubectl --context springmath-au-eks apply -f k8s/bootstrap/au-reply-storage.yaml
+   ```
+
+   This is an administrator bootstrap, not a new CI privilege. The AU overlay
+   mounts this encrypted EBS volume and uses a single-replica `Recreate` rollout.
+   Preserve its dispatch ledger permanently; see [reply storage](replies.md).
 
 ## Claude review bootstrap
 

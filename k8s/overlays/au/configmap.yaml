@@ -16,6 +16,14 @@ data:
   BROKER_ALLOWED_STAGE_IDS: "1435131560,1435131561,1435131562,1435131563,1435131564"
   BROKER_INITIAL_STAGE_ID: "1435131560"
   BROKER_CLOSED_STAGE_ID: "1435131564"
-  BROKER_ENABLE_WRITES: "false"
-  BROKER_SCOPE_IS_IMMUTABLE: "false"
-  BROKER_ENABLE_NOTES: "false"
+  # Controlled synthetic demo: keep product/pipeline ownership, requester/thread
+  # associations and mailbox routing fixed. Disable access before reclassifying.
+  # This is an operational assurance, not an atomic HubSpot API guarantee.
+  BROKER_ENABLE_WRITES: "true"
+  BROKER_SCOPE_IS_IMMUTABLE: "true"
+  BROKER_ENABLE_NOTES: "true"
+  BROKER_ENABLE_REPLIES: "true"
+  HUBSPOT_EMAIL_INBOX_ID: "1733488448"
+  HUBSPOT_EMAIL_CHANNEL_ACCOUNT_ID: "4019892362"
+  HUBSPOT_EMAIL_SENDER_ACTOR_ID: "A-81766059"
+  BROKER_SEND_RESERVATION_DIR: "/data/reply-reservations"

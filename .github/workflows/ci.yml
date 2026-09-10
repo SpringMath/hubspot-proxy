@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_image:
+        description: Publish the reviewed main commit to GHCR (does not deploy)
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      # Node built-ins only; no dependency install or package lifecycle scripts.
+      - name: Syntax checks
+        run: npm run check
+      - name: Isolation and contract tests
+        run: npm test
+      - name: Validate Kubernetes render
+        run: kubectl kustomize k8s > /dev/null
+      - name: Build container (no push)
+        run: docker build --pull --tag hubspot-proxy:ci .
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_image && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: image-publish
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Publish commit-tagged image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          docker build --pull --label "org.opencontainers.image.revision=$GITHUB_SHA" --tag "$image" .
+          docker push "$image"
+          printf 'Published %s. Deploy by its registry digest after review; no Kubernetes deployment was performed.\n' "$image" >> "$GITHUB_STEP_SUMMARY"

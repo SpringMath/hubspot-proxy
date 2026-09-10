@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hubspot-proxy
+  namespace: hubspot-proxy-demo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: hubspot-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Both namespace AND pod must be deliberately approved by the operator.
+    # Port-forward is intended for the initial local-only demonstration.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              hubspot-proxy-client: "true"
+          podSelector:
+            matchLabels:
+              hubspot-proxy-client: "true"
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Adapt to the cluster's DNS implementation, particularly NodeLocal DNS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Standard NetworkPolicy cannot allowlist an HTTPS hostname. This permits
+    # public IPv4:443, not only HubSpot. Enforce destination identity in code;
+    # use an egress gateway/FQDN-aware CNI policy for production network limits.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+      ports:
+        - protocol: TCP
+          port: 443

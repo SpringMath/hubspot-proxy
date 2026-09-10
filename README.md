@@ -26,7 +26,9 @@ npm test
 
 ### 2. Configure HubSpot
 
-Follow the [screenshot setup guide](https://springmath-hubspot-service-key-guide.tim-heckel419739.chatgpt.site). Select a SpringMath pipeline and create these ticket properties:
+Use the repository’s [HubSpot setup instructions](docs/access-boundary.md#exact-setup-inside-hubspot) as the authoritative reference; the [screenshot guide](https://springmath-hubspot-service-key-guide.tim-heckel419739.chatgpt.site) is an optional visual aid.
+
+For the implemented ticket/contact workflow, grant `tickets`, `crm.objects.contacts.read` and `crm.objects.contacts.write`. The `conversations.read` and `conversations.write` scopes are only for the future, unimplemented email adapter—not required today. See the [scope table](docs/access-boundary.md#service-key-scopes). Select a SpringMath pipeline and create these ticket properties:
 
 | Property | Type / value |
 | --- | --- |
@@ -52,7 +54,7 @@ HUBSPOT_ACCESS_TOKEN=<Ochre HubSpot service key>
 BROKER_TOKEN_SHA256=<generated SHA-256 digest>
 ```
 
-Never commit either file. SpringMath must not have access to Ochre’s HubSpot key, broker pod administration or secret store.
+Never commit either file; remove the generated JSON after importing its values into the secret stores. SpringMath must not have access to Ochre’s HubSpot key, broker pod administration or secret store. Every broker-token holder can use its permitted operations; app/portal user-role checks remain required.
 
 ### 4. Build and deploy
 
@@ -75,12 +77,16 @@ Review `k8s/base/networkpolicy.yaml` for your cluster’s DNS/CNI. The base serv
 ```sh
 kubectl --context YOUR_OCHRE_CONTEXT -n hubspot-proxy-demo port-forward --address 127.0.0.1 service/hubspot-proxy 8080:8080
 # In a second terminal:
-curl --fail http://127.0.0.1:8080/readyz
+curl --fail-with-body http://127.0.0.1:8080/readyz
 ```
 
 Test synthetic SpringMath and other-brand tickets: only SpringMath records should be accessible; invalid tokens and unsupported routes must be denied. Readiness alone does not prove isolation.
 
-**Before enabling writes:** Ochre must prevent concurrent changes to ticket pipeline/product ownership and relevant note associations. HubSpot cannot enforce these checks atomically. If that cannot be guaranteed, keep writes off and use a stronger boundary. Otherwise set `BROKER_SCOPE_IS_IMMUTABLE=true`, `BROKER_ENABLE_WRITES=true` and optionally `BROKER_ENABLE_NOTES=true`; reapply manifests and restart the deployment.
+For authenticated tests, keep the bearer header in a permissions-`0600` curl config outside the repo and use `curl --config /secure/path/broker-curl.conf …`—never put tokens in shell arguments/history or use `curl -v`. Follow the [safe test procedure and isolation checklist](docs/deployment.md#3-run-checks-and-a-local-demonstration).
+
+**Before enabling writes:** Ochre must prevent concurrent changes to ticket pipeline/product ownership and relevant note associations. HubSpot cannot enforce these checks atomically, and a post-write check cannot undo a raced write. `BROKER_SCOPE_IS_IMMUTABLE` is an operator assurance, not enforcement. If that cannot be guaranteed, keep writes off and use a stronger boundary.
+
+Otherwise set `BROKER_SCOPE_IS_IMMUTABLE=true`, `BROKER_ENABLE_WRITES=true` and optionally `BROKER_ENABLE_NOTES=true` in `k8s/base/configmap.yaml`; reapply manifests and restart the deployment, because running pods do not refresh environment variables in place.
 
 Give SpringMath the HTTPS broker URL and broker token. **Both app and portal backends need the broker-compatible adapter; changing only the hostname is insufficient.** Verify the complete handoff before going live. Customer emails require separate HubSpot configuration.
 

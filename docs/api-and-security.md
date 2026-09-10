@@ -1,4 +1,4 @@
-# HubSpot support broker
+# API contract and security limits
 
 A small Node.js service that gives SpringMath a **restricted ticket API**, while
 the HubSpot account owner retains the underlying account-wide service key.
@@ -41,12 +41,10 @@ configuration, cluster administration and HubSpot secret. Giving SpringMath an
 unrestricted Ochre token and hosting this in a SpringMath-administered cluster
 would **not** fix the trust boundary.
 
-## Start here
+## Installation references
 
-1. Read [deployment and credential instructions](deployment.md).
-2. Configure one account, pipeline, immutable ownership marker, and allowed stages.
-3. Start **read-only**; test synthetic allowed and denied tickets.
-4. Enable writes only after the account owner accepts the constraints below.
+Use the [README quick start](../README.md#install-on-kubernetes) for installation
+or the [deployment runbook](deployment.md) for detailed operational steps.
 
 SpringMath's Sydney demo uses [main-branch GitHub Actions deployment](github-deployment.md)
 at `https://hubspotproxy.springmath.au`, with one small ARM64 pod, dedicated ECR
@@ -59,13 +57,6 @@ inbox/thread rules. A shared contact never grants access to that person's
 other-brand records. Conversations/email isolation is planned and is **not yet
 implemented by this broker**; those routes remain denied.
 
-```sh
-npm run check
-npm test
-node --env-file=/secure/path/hubspot-proxy.local.env src/server.js
-```
-
-Use Node.js 24 LTS. The protected env file is outside this public repository.
 The [Kubernetes manifests](../k8s/) start with a private ClusterIP service; the
 default installation has no public endpoint and writes are disabled.
 

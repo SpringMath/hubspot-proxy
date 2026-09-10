@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -132,8 +133,9 @@ test('reply preview exposes only scoped projected customer content and derives e
   assert.equal(result.body.threadId, '700')
   assert.match(result.body.contextVersion, /^[a-f0-9]{64}$/)
   assert.match(result.body.dispatchVersion, /^[a-f0-9]{64}$/)
+  assert.equal(result.body.requesterIncomingVerified, true)
   assert.deepEqual(Object.keys(result.body).sort(), ['accountId', 'ticketId', 'source', 'disclaimer', 'ticketUpdatedAt',
-    'threadId', 'latestMessageId', 'to', 'from', 'subject', 'contextVersion', 'dispatchVersion', 'messages'].sort())
+    'threadId', 'latestMessageId', 'to', 'from', 'subject', 'contextVersion', 'dispatchVersion', 'requesterIncomingVerified', 'messages'].sort())
   assert.deepEqual(Object.keys(result.body.messages[0]).sort(), ['messageId', 'direction', 'body', 'createdAt', 'status', 'truncated'].sort())
   assert.ok(!JSON.stringify(result).includes(PRIVATE))
   assert.ok(!JSON.stringify(result).includes('A-50'))
@@ -320,6 +322,75 @@ test('delivery status, internal comments, vendor key order and unrelated metadat
   assert.notEqual((await f.context()).body.dispatchVersion, initial.dispatchVersion)
 })
 
+function historyWithOlderIncoming() {
+  return [message('incoming-older', 'INCOMING', { text: 'Older requester content outside the preview.' }),
+    ...Array.from({ length: 20 }, (_, i) => message(`outgoing-${i}`, 'OUTGOING', {
+      createdAt: new Date(Date.parse(AT) + (i + 1) * 1000).toISOString(),
+    }))]
+}
+
+test('requester proof covers incoming email older than the latest 20 outgoing preview messages', async t => {
+  const f = await fixture(t)
+  f.state.history = historyWithOlderIncoming()
+  const { body } = await f.context()
+  assert.equal(body.requesterIncomingVerified, true)
+  assert.equal(body.messages.length, 20)
+  assert.ok(body.messages.every(item => item.direction === 'OUTGOING'))
+  assert.equal(body.messages[0].messageId, 'outgoing-0')
+  assert.equal(body.latestMessageId, 'outgoing-19')
+  assert.ok(!JSON.stringify(body).includes('Older requester content'))
+  assert.equal(f.counts.messages, 2, 'proof requires both complete history inspections')
+  await f.send(approval(body))
+  assert.equal(f.calls.find(call => call.name === 'send').body.recipients[0].actorId, 'V-900')
+})
+
+for (const [label, mutate] of [
+  ['no incoming anywhere in the full history', s => { s.history.shift() }],
+  ['incoming sender email mismatches requester', s => { s.history[0].senders[0].deliveryIdentifier.value = 'other@example.test' }],
+  ['incoming contact actor mismatches requester', s => { s.history[0].senders[0].actorId = 'V-901' }],
+  ['incoming email actor mismatches requester', s => { s.history[0].senders[0].actorId = 'E-other@example.test' }],
+  ['associated contact has another email', s => { s.contact.properties.email = 'other@example.test' }],
+  ['thread belongs to another contact', s => { s.thread.associatedContactId = '901' }],
+  ['incoming-looking internal comment is not email', s => { s.history[0].type = 'COMMENT' }],
+]) test(`older requester proof fails closed when ${label}`, async t => {
+  const f = await fixture(t)
+  f.state.history = historyWithOlderIncoming()
+  mutate(f.state)
+  // An upstream lookalike proof cannot bypass the broker's own inspection.
+  f.state.thread.requesterIncomingVerified = true
+  await reject(f.context, 409, 'REPLY_CONTEXT_UNAVAILABLE')
+  noSend(f)
+})
+
+test('older incoming disappearing during the final history recheck withholds the entire preview', async t => {
+  const f = await fixture(t, { hook: (call, state) => {
+    if (call.name === 'messages' && call.count === 2) state.history.shift()
+  } })
+  f.state.history = historyWithOlderIncoming()
+  await reject(f.context, 409, 'STALE_APPROVAL')
+  noSend(f)
+})
+
+test('requester proof binds context approval without changing the email-ID-set dispatch reservation', async t => {
+  const f = await fixture(t)
+  const { body } = await f.context()
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+  assert.equal(body.dispatchVersion, digest({ accountId: '123', ticketId: '1', threadId: '700', messageIds: ['incoming-1'] }))
+  const legacyContext = { dispatchVersion: body.dispatchVersion,
+    identity: { contactId: '900', address: TO, updatedAt: AT },
+    thread: { id: '700', ticketId: '1', contactId: '900', inboxId: '30', channelId: '1002', channelAccountId: '40',
+      archived: false, spam: false, status: 'OPEN' },
+    channel: { from: FROM, channelId: '1002', channelAccountId: '40', inboxId: '30', senderActorId: 'A-50', senderType: 'AGENT' },
+    messages: [{ messageId: 'incoming-1', direction: 'INCOMING', body: f.state.history[0].text, createdAt: AT,
+      subject: f.state.history[0].subject, sender: { email: TO, actorId: 'V-900' }, recipient: { email: FROM, actorId: 'A-50' },
+      truncationStatus: 'NOT_TRUNCATED' }],
+  }
+  const { messages, ...binding } = legacyContext
+  assert.equal(body.contextVersion, digest({ ...binding, requesterIncomingVerified: true, messages }))
+  await reject(() => f.send({ ...approval(body), contextVersion: digest(legacyContext) }), 409, 'STALE_APPROVAL')
+  noSend(f)
+})
+
 for (const [label, changed, status, code] of [
   ['account', { accountId: '456' }, 400, 'INVALID_REQUEST'],
   ['recipient', { to: 'other@example.test' }, 409, 'STALE_APPROVAL'],
@@ -328,6 +399,7 @@ for (const [label, changed, status, code] of [
   ['ticket version', { expectedUpdatedAt: '2026-09-10T13:00:00.000Z' }, 409, 'STALE_APPROVAL'],
   ['context version', { contextVersion: 'f'.repeat(64) }, 409, 'STALE_APPROVAL'],
   ['unknown routing field', { threadId: '701' }, 400, 'INVALID_REQUEST'],
+  ['caller-supplied incoming proof', { requesterIncomingVerified: true }, 400, 'INVALID_REQUEST'],
   ['attachments', { attachments: [{ fileId: '123' }] }, 400, 'INVALID_REQUEST'],
   ['CC', { cc: 'other@example.test' }, 400, 'INVALID_REQUEST'],
   ['empty body', { body: '  ' }, 400, 'INVALID_REQUEST'],

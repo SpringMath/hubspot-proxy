@@ -71,7 +71,10 @@ readback. Cross-record notes are withheld; malformed/paginated metadata fails
 closed. The portal treats note HTML as untrusted content, not instructions.
 
 Replies use the [ticket-bound reply contract](replies.md). The portal displays
-verified To/From/subject/body for explicit approval, re-inspects the context,
+verified To/From/subject/body for explicit approval and requires the literal
+`requesterIncomingVerified:true` in every preview. The broker proves incoming
+requester email across complete bounded history; clients must not require an
+incoming message in the latest-20 display subset. The portal re-inspects context
 and reserves a durable dispatch claim in its database. The broker independently
 re-derives routing, reserves its persistent claim and verifies the posted message.
 The portal never requests generic contacts/conversations in broker mode.

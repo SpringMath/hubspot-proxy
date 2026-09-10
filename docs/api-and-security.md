@@ -81,7 +81,7 @@ All business routes require `Authorization: Bearer <broker-token>`.
 | POST | `/springmath/v1/tickets/{ticketId}/notes` | Optional ticket-only internal note; exact account/freshness/body, never a customer email. |
 | GET | `/springmath/v1/tickets/{ticketId}/reply-context` | Optional bounded preview from one verified native email thread; private routing metadata withheld. |
 | POST | `/springmath/v1/tickets/{ticketId}/replies` | Optional approved reply, freshly derived routing and persistent exclusive dispatch reservation. |
-| GET | `/healthz`, `/readyz` | Minimal unauthenticated probes; readiness checks the pinned upstream account. |
+| GET | `/healthz`, `/readyz` | Minimal unauthenticated probes; readiness checks the pinned upstream account and durable storage when replies are enabled. |
 
 Foreign and missing tickets have the same `404 NOT_FOUND` response. Unknown
 routes are denied. Clients cannot change pipeline, ownership, requester, external

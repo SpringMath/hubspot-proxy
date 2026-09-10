@@ -89,16 +89,23 @@ branch fell behind, update it, obtain review again and merge the new head.
 2. Uses GitHub OIDC for the broker-only IAM role; no static AWS secret is used.
 3. Builds native ARM64 for Sydney's ARM64 nodes, pushes ECR, and deploys by
    immutable registry digest, not a moving tag.
-4. Pipes the two-key Kubernetes Secret directly to `kubectl` stdin using
+4. Renders `k8s/overlays/au` with a purely local, empty JSON Patch and kubectl's
+   YAML decoder (no API discovery), emitting bounded newline-delimited JSON.
+   Structurally validates exact API versions/kinds, each `metadata.namespace`,
+   resource names/uniqueness and the required Deployment. Only the broker image
+   and pod revision annotation may contain their respective placeholders. A
+   ConfigMap string cannot spoof resource metadata. All validation finishes
+   before either apply; only the validated, serialized Kubernetes List is used.
+5. Pipes the two-key Kubernetes Secret directly to `kubectl` stdin using
    **server-side apply** with field manager `hubspot-proxy-deploy`. No secret
    temp files, CLI arguments or last-applied-configuration copies are created.
    Child processes do not inherit the application/review token environment.
    Failure diagnostics intentionally omit submitted Secret contents.
-5. Renders `k8s/overlays/au`, refuses unexpected cluster/RBAC/secret resources,
-   replaces the exact image/revision placeholders and applies only the broker
+6. Applies the validated resources with the exact image/revision fields replaced
+   to only the broker
    namespace resources. A commit/run/attempt annotation restarts pods even when
    the same commit is dispatched after a secret or configuration change.
-6. Waits for rollout and the certificate, then checks public TLS, `/healthz`,
+7. Waits for rollout and the certificate, then checks public TLS, `/healthz`,
    `/readyz` and an unauthenticated **401** for `/account-info/v3/details`.
    Initial DNS reconciliation is given bounded read-only retries.
 

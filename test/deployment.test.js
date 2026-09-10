@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { assertMain, assertClaudeApproval, verifyMergedReview, githubRequest, secretManifest,
   renderDeployment, commandEnvironment, deploy, deployment } from '../scripts/deploy-au.mjs'
 import { smoke } from '../scripts/smoke-au.mjs'
@@ -16,21 +17,27 @@ const review = { id: 10, user: { login: 'claude[bot]' }, state: 'APPROVED', comm
   submitted_at: '2026-09-10T13:00:00Z', body: `Reviewed.\n${deployment.marker}` }
 const pr = { number: 1, merged: true, merged_at: '2026-09-10T14:00:00Z', merge_commit_sha: sha,
   base: { ref: 'main', repo: { full_name: deployment.repository } }, head: { sha: head, repo: { full_name: deployment.repository } } }
-const yaml = `apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: hubspot-proxy
-  namespace: hubspot-proxy-demo
-spec:
-  template:
-    metadata:
-      annotations:
-        springmath.io/deploy-revision: HUBSPOT_PROXY_DEPLOY_REVISION
-    spec:
-      containers:
-        - name: broker
-          image: HUBSPOT_PROXY_IMAGE
-`
+const deploymentObject = {
+  apiVersion: 'apps/v1', kind: 'Deployment',
+  metadata: { name: 'hubspot-proxy', namespace: deployment.namespace },
+  spec: { template: {
+    metadata: { annotations: { 'springmath.io/deploy-revision': 'HUBSPOT_PROXY_DEPLOY_REVISION' } },
+    spec: { containers: [{ name: 'broker', image: 'HUBSPOT_PROXY_IMAGE' }] },
+  } },
+}
+const configMap = { apiVersion: 'v1', kind: 'ConfigMap',
+  metadata: { name: 'hubspot-proxy-config', namespace: deployment.namespace }, data: { MODE: 'demo' } }
+const ndjson = (...objects) => `${objects.map(object => JSON.stringify(object)).join('\n')}\n`
+const parseRender = output => {
+  const list = JSON.parse(output)
+  assert.equal(list.apiVersion, 'v1')
+  assert.equal(list.kind, 'List')
+  assert.ok(Array.isArray(list.items))
+  return list.items
+}
+const fixtureRender = ndjson(deploymentObject)
+const renderArgs = ['--kubeconfig=/dev/null', 'patch', '--local=true', '--type=json', '--patch=[]',
+  '--kustomize=k8s/overlays/au', '--output=jsonpath={@}{"\\n"}']
 function fixtureRequest(overrides = {}) {
   const prefix = `/repos/${deployment.repository}`
   const data = { [`${prefix}/commits/${sha}/pulls?per_page=100`]: [pr], [`${prefix}/pulls/1`]: pr,
@@ -101,22 +108,94 @@ test('secret manifest contains only the upstream token and hash, with no last-ap
     { BROKER_TOKEN_SHA256: 'raw-broker-token' }]) assert.throws(() => secretManifest({ ...env, ...change }))
 })
 test('deploy render pins the exact ECR digest and restarts pods on each rerun without changing source', () => {
-  const first = renderDeployment(yaml, env)
-  assert.ok(first.includes(env.IMAGE_DIGEST))
-  assert.ok(first.includes(`${sha}-1234-1`))
+  const first = renderDeployment(fixtureRender, env)
+  const [object] = parseRender(first)
+  assert.equal(object.spec.template.spec.containers[0].image, env.IMAGE_DIGEST)
+  assert.equal(object.spec.template.metadata.annotations['springmath.io/deploy-revision'], `${sha}-1234-1`)
   assert.ok(!first.includes('HUBSPOT_PROXY_IMAGE'))
-  assert.notEqual(renderDeployment(yaml, { ...env, GITHUB_RUN_ATTEMPT: '2' }), first)
+  assert.notEqual(renderDeployment(fixtureRender, { ...env, GITHUB_RUN_ATTEMPT: '2' }), first)
+  assert.equal(deploymentObject.spec.template.spec.containers[0].image, 'HUBSPOT_PROXY_IMAGE')
   for (const image of [`${deployment.registry}:latest`, `elsewhere/image@sha256:${'d'.repeat(64)}`, '']) {
-    assert.throws(() => renderDeployment(yaml, { ...env, IMAGE_DIGEST: image }))
+    assert.throws(() => renderDeployment(fixtureRender, { ...env, IMAGE_DIGEST: image }))
   }
 })
-test('overlay render cannot apply namespace/cluster RBAC/secrets, other namespaces or duplicate placeholders', () => {
+test('overlay render rejects namespace/cluster RBAC/secrets and foreign API versions', () => {
   for (const kind of ['Namespace', 'ClusterRole', 'ClusterRoleBinding', 'Role', 'RoleBinding', 'Secret']) {
-    assert.throws(() => renderDeployment(yaml.replace('kind: Deployment', `kind: ${kind}`), env))
+    assert.throws(() => renderDeployment(ndjson({ ...deploymentObject, kind }), env))
   }
-  assert.throws(() => renderDeployment(yaml.replace('namespace: hubspot-proxy-demo', 'namespace: default'), env))
-  assert.throws(() => renderDeployment(`${yaml}\n# HUBSPOT_PROXY_IMAGE`, env))
-  assert.throws(() => renderDeployment(yaml.replace('HUBSPOT_PROXY_DEPLOY_REVISION', 'missing'), env))
+  for (const apiVersion of ['v1', 'apps/v2', 'evil.example/apps/v1', '', null]) {
+    assert.throws(() => renderDeployment(ndjson({ ...deploymentObject, apiVersion }), env))
+  }
+  assert.throws(() => renderDeployment(ndjson(deploymentObject, { ...configMap, apiVersion: 'evil.example/v1' }), env))
+  assert.throws(() => renderDeployment(ndjson(deploymentObject, { apiVersion: 'apps', kind: 'v1/Deployment',
+    metadata: { name: 'other', namespace: deployment.namespace } }), env))
+})
+test('overlay scope checks actual metadata.namespace, never a nested data.namespace lookalike', () => {
+  for (const namespace of ['default', 'foreign', undefined, null, 7]) {
+    const object = { ...configMap, metadata: { ...configMap.metadata, namespace },
+      data: { namespace: deployment.namespace } }
+    assert.throws(() => renderDeployment(ndjson(deploymentObject, object), env))
+  }
+  const object = { ...deploymentObject, metadata: { name: 'hubspot-proxy' },
+    data: { namespace: deployment.namespace } }
+  assert.throws(() => renderDeployment(ndjson(object), env))
+})
+test('overlay parsing rejects lists, nonobjects, malformed records and duplicate resource identities', () => {
+  for (const value of [null, 1, 'Deployment', [], [deploymentObject],
+    { apiVersion: 'v1', kind: 'List', items: [deploymentObject] }]) {
+    assert.throws(() => renderDeployment(ndjson(value), env))
+    assert.throws(() => renderDeployment(ndjson(deploymentObject, value), env))
+  }
+  for (const value of ['', '\n', '{"apiVersion":', `${fixtureRender}{bad}\n`,
+    `${fixtureRender}# not a JSON record\n`]) assert.throws(() => renderDeployment(value, env))
+  assert.throws(() => renderDeployment(ndjson(deploymentObject, deploymentObject), env))
+  assert.throws(() => renderDeployment(ndjson(deploymentObject, configMap, { ...configMap, data: { MODE: 'other' } }), env))
+})
+test('render bounds count UTF-8 bytes and resource objects, with valid explicit names required', () => {
+  const maps = Array.from({ length: 64 }, (_, index) => ({ ...configMap,
+    metadata: { ...configMap.metadata, name: `hubspot-proxy-config-${index}` } }))
+  assert.equal(parseRender(renderDeployment(ndjson(deploymentObject, ...maps.slice(0, 63)), env)).length, 64)
+  assert.throws(() => renderDeployment(ndjson(deploymentObject, ...maps), env))
+  const oversized = ndjson(deploymentObject, { ...configMap, data: { text: 'é'.repeat(500_001) } })
+  assert.ok(oversized.length < 1_000_000)
+  assert.ok(Buffer.byteLength(oversized) > 1_000_000)
+  assert.throws(() => renderDeployment(oversized, env))
+  for (const name of [undefined, null, '', 'foreign/name', '..', 'UPPERCASE', 'a'.repeat(64)]) {
+    assert.throws(() => renderDeployment(ndjson(deploymentObject,
+      { ...configMap, metadata: { namespace: deployment.namespace, name } }), env))
+  }
+})
+test('placeholders are valid only at the broker Deployment image and exact pod revision annotation', () => {
+  const mutations = [
+    object => { object.metadata.name = 'other-deployment' },
+    object => { object.spec.template.spec.containers[0].name = 'sidecar' },
+    object => { object.spec.template.spec.containers.push({ name: 'broker', image: 'fixed:tag' }) },
+    object => { object.spec.template.spec.containers.push({ name: 'sidecar', image: 'HUBSPOT_PROXY_IMAGE' }) },
+    object => { object.spec.template.spec.containers[0].image = 'prefix-HUBSPOT_PROXY_IMAGE' },
+    object => { object.spec.template.spec.containers[0].image = 'fixed:tag'; object.data = { image: 'HUBSPOT_PROXY_IMAGE' } },
+    object => {
+      delete object.spec.template.metadata.annotations['springmath.io/deploy-revision']
+      object.metadata.annotations = { 'springmath.io/deploy-revision': 'HUBSPOT_PROXY_DEPLOY_REVISION' }
+    },
+    object => { object.spec.template.metadata.annotations['springmath.io/deploy-revision'] = 'missing' },
+    object => { object.spec.template.metadata.annotations.other = 'HUBSPOT_PROXY_DEPLOY_REVISION' },
+  ]
+  for (const mutate of mutations) {
+    const object = structuredClone(deploymentObject)
+    mutate(object)
+    assert.throws(() => renderDeployment(ndjson(object), env))
+  }
+  for (const placeholder of ['HUBSPOT_PROXY_IMAGE', 'HUBSPOT_PROXY_DEPLOY_REVISION']) {
+    assert.throws(() => renderDeployment(ndjson(deploymentObject, { ...configMap, data: { message: placeholder } }), env))
+  }
+})
+test('multiline strings cannot spoof resource metadata and are preserved without textual substitutions', () => {
+  const message = 'Example only:\nkind: Secret\nmetadata:\n  namespace: foreign\n---\napiVersion: evil/v1\n'
+  const object = { ...configMap, data: { message, namespace: 'not-resource-metadata' } }
+  const output = parseRender(renderDeployment(ndjson(deploymentObject, object), env))
+  assert.deepEqual(output[1], object)
+  assert.equal(output[1].data.message, message)
+  assert.equal(output[0].spec.template.spec.containers[0].image, env.IMAGE_DIGEST)
 })
 test('application/review secrets are not inherited by kubectl children but OIDC AWS credentials remain usable', () => {
   const child = commandEnvironment({ ...env, AWS_ACCESS_KEY_ID: 'oidc-fixture', GITHUB_TOKEN: 'gh-fixture', ANTHROPIC_API_KEY: 'ai-fixture' })
@@ -125,8 +204,8 @@ test('application/review secrets are not inherited by kubectl children but OIDC 
 })
 test('deployment pipes secrets over stdin with server-side apply and no raw bearer or secret CLI arguments', async () => {
   const commands = []
-  await deploy(env, (args, input) => { commands.push({ args, input }); return args[0] === 'kustomize' ? yaml : '' })
-  assert.deepEqual(commands[0].args, ['kustomize', 'k8s/overlays/au'])
+  await deploy(env, (args, input) => { commands.push({ args, input }); return args.includes('--local=true') ? fixtureRender : '' })
+  assert.deepEqual(commands[0].args, renderArgs)
   assert.equal(commands.length, 5)
   for (const command of commands.slice(1, 3)) {
     assert.ok(command.args.includes('--server-side'))
@@ -140,8 +219,33 @@ test('deployment pipes secrets over stdin with server-side apply and no raw bear
 })
 test('invalid deployment input fails before any Kubernetes mutation', async () => {
   const commands = []
-  await assert.rejects(deploy({ ...env, IMAGE_DIGEST: 'bad' }, args => { commands.push(args); return yaml }))
-  assert.deepEqual(commands, [['kustomize', 'k8s/overlays/au']])
+  await assert.rejects(deploy({ ...env, IMAGE_DIGEST: 'bad' }, args => { commands.push(args); return fixtureRender }))
+  assert.deepEqual(commands, [renderArgs])
+})
+test('all rendered objects are validated before the first secret or resource write', async () => {
+  for (const invalidRender of [ndjson(deploymentObject, { ...configMap, metadata: { name: 'bad' },
+    data: { namespace: deployment.namespace } }), `${fixtureRender}{bad}\n`,
+  ndjson(deploymentObject, configMap, configMap)]) {
+    const commands = []
+    await assert.rejects(deploy(env, (args, input) => { commands.push({ args, input }); return invalidRender }))
+    assert.deepEqual(commands, [{ args: renderArgs, input: undefined }])
+  }
+})
+test('real kubectl renders the complete AU overlay locally with an unreachable API endpoint', context => {
+  const result = spawnSync('kubectl', [...renderArgs, '--server=http://127.0.0.1:1', '--request-timeout=1s'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 15000, maxBuffer: 2_000_000,
+    env: { PATH: process.env.PATH },
+  })
+  if (result.error?.code === 'ENOENT' && process.env.GITHUB_ACTIONS !== 'true') {
+    context.skip('kubectl is not installed'); return
+  }
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 0, result.stderr)
+  const rendered = parseRender(renderDeployment(result.stdout, env))
+  assert.ok(rendered.length >= 6)
+  assert.ok(rendered.every(object => object.metadata.namespace === deployment.namespace))
+  assert.ok(rendered.some(object => object.kind === 'Certificate' && object.apiVersion === 'cert-manager.io/v1'))
+  assert.ok(rendered.some(object => object.kind === 'Ingress' && object.apiVersion === 'networking.k8s.io/v1'))
 })
 test('public smoke makes unauthenticated read-only requests over pinned HTTPS and requires 401 for protected APIs', async () => {
   const calls = []

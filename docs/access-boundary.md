@@ -6,6 +6,42 @@ Ticket-bound Conversations/email routes are still planned and remain denied.**
 The SpringMath Sydney demonstration uses SpringMath's own account; it is not an
 installation in Ochre's account and must never hold Ochre's unrestricted key.
 
+## Handoff, contacts and visibility
+
+The intended flow is AU customer in Pi → Ochre Tier 1 in the portal → SpringMath
+Tier 2 in the same portal → return to Ochre or resolve. All staff work the same
+HubSpot ticket. Pi closes only after the originating handoff is confirmed; no
+Zendesk ticket is created. Customer follow-up then uses configured email support,
+not further messages in the closed Pi conversation.
+
+Requester contacts are created automatically on handoff when an exact active
+primary-email match does not exist. The trusted app server supplies its signed-in
+user's email; the broker privately finds/creates the minimal contact and verifies
+its ticket association. No Ochre pre-provisioning or bulk user synchronization is
+required. Failure or an uncertain result must not close Pi or trigger blind
+duplicate ticket creation. Existing email/staff intake must establish the same
+requester fields and associations explicitly.
+
+Both SpringMath backends must call the broker: the app for creation and handoff
+verification, the portal for permitted staff operations. Only the Ochre-controlled
+broker holds the upstream HubSpot key. Keeping that key in the app while proxying
+only the portal would leave the account-wide access problem unsolved. Neither
+service credential is sent to browser users. Client cutover remains separate
+work; see the [client contract audit](client-contract-audit.md).
+
+Tier 2 escalation changes the work queue/status, not the first grant of access.
+Authorized portal support roles can read permitted tickets across statuses.
+Hiding Tier 1 tickets from SpringMath staff until escalation is **not** the
+current policy and would require additional server-enforced authorization.
+
+Customer communication is separate from staff work: configure acknowledgement
+and resolution notifications and explicit customer-facing progress replies.
+Internal notes, shared-summary edits and routine team handoffs should not email
+the customer automatically. HubSpot supports conditional ticket-status email
+automation subject to the Service Hub plan/configuration; contact association
+and status changes alone are not evidence of delivery. The broker's email routes
+remain denied until the planned adapter and actual-mailbox tests are complete.
+
 ## Service key scopes
 
 For the complete proposed workflow, the single upstream service key has:
@@ -51,7 +87,9 @@ the custom properties using HubSpot settings, not the broker service key.
    allowed. A missing marker is denied. Never mark every ticket for a contact or
    company simply because they also use SpringMath. Use a unique external key
    for imported records when they need app-conversation lookup.
-5. Associate the requester contact with the ticket. Store the same verified
+5. For app-created tickets the broker privately finds/creates and associates the
+   requester automatically. For email/staff intake, associate the requester
+   contact with the ticket. Store the same verified
    primary email in `sm_au_requester_email`. A contact may have other-brand
    relationships: **this grants access to neither their full CRM profile nor
    any other ticket, activity or conversation**. The broker uses only the minimal

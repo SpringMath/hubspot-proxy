@@ -6,6 +6,12 @@ export const deployment = Object.freeze({
   registry: '975774911479.dkr.ecr.ap-southeast-2.amazonaws.com/springmath-au-hubspot-proxy',
   marker: '<!-- claude-code-review:v1 -->',
 })
+// kubectl performs the YAML/Kustomize decoding locally. An empty JSON Patch
+// preserves every resource, and JSONPath prints one compact JSON object per line.
+export const renderArguments = Object.freeze([
+  '--kubeconfig=/dev/null', 'patch', '--local=true', '--type=json', '--patch=[]',
+  '--kustomize=k8s/overlays/au', '--output=jsonpath={@}{"\\n"}',
+])
 const shaPattern = /^[a-f0-9]{40}$/
 const fail = message => { throw new Error(message) }
 
@@ -82,7 +88,7 @@ export function secretManifest(env) {
     } }
 }
 
-export function renderDeployment(yaml, env) {
+export function renderDeployment(ndjson, env) {
   assertMain(env)
   const image = env.IMAGE_DIGEST || ''
   if (!new RegExp(`^${deployment.registry.replaceAll('.', '\\.')}@sha256:[a-f0-9]{64}$`).test(image)) {
@@ -91,21 +97,49 @@ export function renderDeployment(yaml, env) {
   const runId = env.GITHUB_RUN_ID || ''
   const attempt = env.GITHUB_RUN_ATTEMPT || ''
   if (!/^\d{1,30}$/.test(runId) || !/^\d{1,10}$/.test(attempt)) fail('GitHub deployment run identity is missing.')
-  const allowed = new Set(['Deployment', 'Service', 'ConfigMap', 'Ingress', 'NetworkPolicy', 'Certificate'])
-  const documents = yaml.split(/^---\s*$/m).filter(document => document.trim())
-  if (!documents.length || yaml.length > 1_000_000) fail('Invalid AU Kubernetes render.')
-  for (const document of documents) {
-    const kinds = [...document.matchAll(/^kind: (\S+)\s*$/gm)]
-    if (kinds.length !== 1 || !allowed.has(kinds[0][1])
-      || !/^  namespace: hubspot-proxy-demo\s*$/m.test(document)) {
+  const allowed = new Map([['Deployment', 'apps/v1'], ['Service', 'v1'], ['ConfigMap', 'v1'],
+    ['Ingress', 'networking.k8s.io/v1'], ['NetworkPolicy', 'networking.k8s.io/v1'], ['Certificate', 'cert-manager.io/v1']])
+  const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+  const validName = value => typeof value === 'string' && value.length >= 1 && value.length <= 253
+    && value.split('.').every(label => label.length <= 63 && /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(label))
+  if (typeof ndjson !== 'string' || Buffer.byteLength(ndjson) > 1_000_000) fail('Invalid AU Kubernetes render.')
+  const lines = ndjson.split(/\r?\n/).filter(line => line.trim())
+  if (!lines.length || lines.length > 64) fail('Invalid AU Kubernetes render.')
+  const resources = lines.map(line => {
+    try { return JSON.parse(line) } catch { fail('Invalid AU Kubernetes render.') }
+  })
+  const identities = new Set()
+  for (const resource of resources) {
+    if (!isObject(resource) || typeof resource.apiVersion !== 'string' || typeof resource.kind !== 'string'
+      || allowed.get(resource.kind) !== resource.apiVersion || !isObject(resource.metadata)
+      || resource.metadata.namespace !== deployment.namespace || !validName(resource.metadata.name)) {
       fail('AU overlay must contain only approved namespace-scoped application resources.')
     }
+    const identity = `${resource.apiVersion}/${resource.kind}/${resource.metadata.namespace}/${resource.metadata.name}`
+    if (identities.has(identity)) fail('AU overlay contains duplicate resource identities.')
+    identities.add(identity)
   }
+  const brokers = resources.filter(resource => resource.kind === 'Deployment' && resource.metadata.name === 'hubspot-proxy')
+  if (brokers.length !== 1) fail('AU overlay must contain exactly one hubspot-proxy Deployment.')
+  const template = brokers[0].spec?.template
+  const containers = template?.spec?.containers
+  const annotations = template?.metadata?.annotations
+  if (!Array.isArray(containers) || !containers.every(isObject)
+    || containers.filter(container => container.name === 'broker').length !== 1 || !isObject(annotations)) {
+    fail('AU overlay must contain one broker container and deployment revision annotation.')
+  }
+  const broker = containers.find(container => container.name === 'broker')
+  if (broker.image !== 'HUBSPOT_PROXY_IMAGE'
+    || annotations['springmath.io/deploy-revision'] !== 'HUBSPOT_PROXY_DEPLOY_REVISION') {
+    fail('AU deployment placeholders must be at their approved image and pod annotation paths.')
+  }
+  const serialized = JSON.stringify(resources)
   for (const placeholder of ['HUBSPOT_PROXY_IMAGE', 'HUBSPOT_PROXY_DEPLOY_REVISION']) {
-    if (yaml.split(placeholder).length !== 2) fail(`AU overlay must contain exactly one ${placeholder} placeholder.`)
+    if (serialized.split(placeholder).length !== 2) fail(`AU overlay must contain exactly one ${placeholder} placeholder.`)
   }
-  return yaml.replace('HUBSPOT_PROXY_IMAGE', image)
-    .replace('HUBSPOT_PROXY_DEPLOY_REVISION', `${env.GITHUB_SHA}-${runId}-${attempt}`)
+  broker.image = image
+  annotations['springmath.io/deploy-revision'] = `${env.GITHUB_SHA}-${runId}-${attempt}`
+  return JSON.stringify({ apiVersion: 'v1', kind: 'List', items: resources })
 }
 
 export function commandEnvironment(env) {
@@ -128,8 +162,8 @@ function kubectl(args, input, env) {
 export async function deploy(env, run = kubectl) {
   assertMain(env)
   const secret = secretManifest(env)
-  const yaml = run(['kustomize', 'k8s/overlays/au'], undefined, env)
-  const rendered = renderDeployment(yaml, env)
+  const ndjson = run(renderArguments, undefined, env)
+  const rendered = renderDeployment(ndjson, env)
   // Both payloads are stdin only. Server-side apply does not create the
   // last-applied-configuration annotation containing a second secret copy.
   const apply = ['apply', '--server-side', '--field-manager=hubspot-proxy-deploy', '--namespace', deployment.namespace, '-f', '-']

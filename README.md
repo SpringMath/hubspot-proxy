@@ -4,6 +4,28 @@ A small Node.js service that gives SpringMath a **restricted ticket API**, while
 the HubSpot account owner retains the underlying account-wide service key.
 No runtime dependencies. No database. No generic reverse-proxy route.
 
+## Support handoff and callers
+
+An authenticated AU customer requests human support in Pi. The integration
+automatically reuses an exact active requester contact or creates an email-only
+contact, creates the Tier 1 ticket, and verifies the contact association before
+Pi closes. This happens on support handoff, not as a bulk import of app users.
+Ochre Support works the same ticket in the portal and can escalate it to
+SpringMath Tier 2. SpringMath staff investigate and return it to Ochre or resolve
+it as appropriate. No Zendesk ticket is created; archive is not resolution.
+
+**Tier 2 is work routing, not the initial grant of read access.** Authorized
+portal support roles can read in-scope tickets across statuses. Escalated-only
+visibility would require an additional server-enforced role policy.
+
+**Both the app server and portal server must use the broker** for the intended
+Ochre setup. Routing only the portal through it while the app retains Ochre's
+account-wide key would not solve the trust boundary. Neither credential belongs
+in a browser. The clients still authenticate users and enforce role permissions;
+the broker verifies the fixed account/pipeline/ownership boundary. See
+[client integration](#client-integration-is-a-separate-change) for the pending
+cutover; this repository does not redirect either deployed client.
+
 ```mermaid
 flowchart LR
   A[SpringMath app and portal] -->|Broker bearer token| B[Ochre-controlled broker]

@@ -175,11 +175,14 @@ export function createReplies(config, { upstream, readTicket, reservations }) {
       if (typeof created.id !== 'string' || !MESSAGE_ID.test(created.id) || priorMessageIds.includes(created.id)) unavailable()
       const row = object(await upstream(`${path}/${created.id}`, { signal }))
       const status = object(row.status).statusType
+      // HubSpot may remove earlier reply history. The returned reply must still
+      // exactly equal the approved body; generic or unknown truncation fails closed.
       if (row.id !== created.id || row.conversationsThreadId !== context.threadId || row.type !== 'MESSAGE'
         || row.direction !== 'OUTGOING' || row.archived !== false || row.channelId !== '1002'
         || row.channelAccountId !== config.channelAccountId || row.createdBy !== config.senderActorId
         || row.text !== input.body || row.subject !== context.subject || !validDate(row.createdAt)
-        || row.truncationStatus !== 'NOT_TRUNCATED' || !['SENT', 'READ', 'RECEIVED'].includes(status)) unavailable()
+        || !['NOT_TRUNCATED', 'TRUNCATED_TO_MOST_RECENT_REPLY'].includes(row.truncationStatus)
+        || !['SENT', 'READ', 'RECEIVED'].includes(status)) unavailable()
       participant(row.senders, context.from)
       participant(row.recipients, context.to)
       const finalIdentity = await requester(ticketId, signal)

@@ -147,8 +147,9 @@ test('reply preview exposes only scoped projected customer content and derives e
   noSend(f)
 })
 
-test('successful reply uses the exact verified native route and reports acceptance, not delivery', async t => {
-  const f = await fixture(t)
+for (const truncationStatus of ['NOT_TRUNCATED', 'TRUNCATED_TO_MOST_RECENT_REPLY']) test(`successful ${truncationStatus} reply verifies the exact approved content and routing, not delivery`, async t => {
+  const f = await fixture(t, { hook: (call, state) => call.name === 'sent-message'
+    ? json({ ...state.sent, truncationStatus }) : undefined })
   const input = approval((await f.context()).body)
   assert.deepEqual(await f.send(input), { status: 201, body: { accountId: '123', ticketId: '1', applied: true,
     customerReplyAccepted: true, threadId: '700', messageId: 'sent-1', hubspotStatus: 'SENT', emailDelivery: 'not_verified' } })
@@ -158,6 +159,41 @@ test('successful reply uses the exact verified native route and reports acceptan
   assert.deepEqual(send.body, { type: 'MESSAGE', text: input.body, attachments: [], senderActorId: 'A-50', channelId: '1002',
     channelAccountId: '40', subject: input.subject, recipients: [{ actorId: 'V-900', recipientField: 'TO',
       deliveryIdentifiers: [{ type: 'HS_EMAIL_ADDRESS', value: TO }] }] })
+  assert.equal(f.counts.send, 1)
+  assert.equal((await readdir(f.directory)).length, 1)
+  await reject(() => f.restart().handle({ method: 'POST', url: SEND, body: input }), 409, 'REPLY_DISPATCH_ALREADY_RESERVED')
+  assert.equal(f.counts.send, 1, 'verified reply-history removal must not permit a second send')
+})
+
+for (const [label, mutate] of [
+  ['generic truncation with otherwise exact text', row => { row.truncationStatus = 'TRUNCATED' }],
+  ['unknown truncation state', row => { row.truncationStatus = 'UNKNOWN' }],
+  ['missing truncation state', row => { delete row.truncationStatus }],
+  ['incomplete approved body', row => { row.text = row.text.slice(0, -1) }],
+  ['unapproved quoted history appended to body', row => { row.text += '\n\nQuoted earlier synthetic email.' }],
+  ['changed subject', row => { row.subject = 'An unapproved subject' }],
+  ['changed thread', row => { row.conversationsThreadId = '701' }],
+  ['changed channel', row => { row.channelId = '1001' }],
+  ['changed channel account', row => { row.channelAccountId = '41' }],
+  ['changed sending actor', row => { row.createdBy = 'A-51' }],
+  ['changed sender address', row => { row.senders = [person('other@example.test', 'A-50')] }],
+  ['changed recipient address', row => { row.recipients = [person('other@example.test', 'V-901')] }],
+  ['CC recipient', row => { row.recipients = [person(TO, 'V-900', { recipientField: 'CC' })] }],
+  ['extra recipient', row => { row.recipients = [...row.recipients, person('other@example.test', 'V-901')] }],
+  ['incoming direction', row => { row.direction = 'INCOMING' }],
+  ['archived message', row => { row.archived = true }],
+  ['invalid creation timestamp', row => { row.createdAt = 'invalid' }],
+  ['failed native status', row => { row.status = { statusType: 'FAILED' } }],
+]) test(`most-recent reply readback rejects ${label} and retains its durable reservation`, async t => {
+  const f = await fixture(t, { hook: (call, state) => {
+    if (call.name !== 'sent-message') return
+    const row = { ...state.sent, truncationStatus: 'TRUNCATED_TO_MOST_RECENT_REPLY' }
+    mutate(row)
+    return json(row)
+  } })
+  const input = approval((await f.context()).body)
+  await reject(() => f.send(input), 502, 'WRITE_OUTCOME_UNKNOWN')
+  await reject(() => f.restart().handle({ method: 'POST', url: SEND, body: input }), 409, 'REPLY_DISPATCH_ALREADY_RESERVED')
   assert.equal(f.counts.send, 1)
   assert.equal((await readdir(f.directory)).length, 1)
 })
@@ -518,18 +554,27 @@ for (const [label, trigger, mutate, status, code] of [
   noSend(f)
 })
 
-for (const [label, mutate] of [
-  ['requester contact', s => { s.contact.properties.email = 'someone-else@example.test' }],
-  ['thread association', s => { s.thread.threadAssociations.associatedTicketId = '2' }],
-  ['email channel', s => { s.channel.authorized = false }],
-  ['sender actor', s => { s.actor.type = 'INTEGRATION' }],
-]) test(`post-send ${label} change cannot be reported as confirmed success`, async t => {
-  const f = await fixture(t, { hook: (call, state) => { if (call.name === 'sent-message') mutate(state) } })
-  const input = approval((await f.context()).body)
-  await reject(() => f.send(input), 502, 'WRITE_OUTCOME_UNKNOWN')
-  assert.equal(f.counts.send, 1)
-  assert.equal((await readdir(f.directory)).length, 1)
-})
+for (const truncationStatus of ['NOT_TRUNCATED', 'TRUNCATED_TO_MOST_RECENT_REPLY']) {
+  for (const [label, mutate] of [
+    ['ticket pipeline', s => { s.ticket.properties.hs_pipeline = '21' }],
+    ['product marker', s => { s.ticket.properties.sm_brand = 'other-brand' }],
+    ['requester contact', s => { s.contact.properties.email = 'someone-else@example.test' }],
+    ['thread association', s => { s.thread.threadAssociations.associatedTicketId = '2' }],
+    ['email channel', s => { s.channel.authorized = false }],
+    ['sender actor', s => { s.actor.type = 'INTEGRATION' }],
+  ]) test(`post-send ${label} change cannot confirm a ${truncationStatus} reply`, async t => {
+    const f = await fixture(t, { hook: (call, state) => {
+      if (call.name === 'sent-message') {
+        mutate(state)
+        return json({ ...state.sent, truncationStatus })
+      }
+    } })
+    const input = approval((await f.context()).body)
+    await reject(() => f.send(input), 502, 'WRITE_OUTCOME_UNKNOWN')
+    assert.equal(f.counts.send, 1)
+    assert.equal((await readdir(f.directory)).length, 1)
+  })
+}
 
 test('inbound email actor may be absent or a matching email actor without accepting caller routing', async t => {
   for (const actorId of [undefined, `E-${TO}`]) await t.test(String(actorId), async t => {

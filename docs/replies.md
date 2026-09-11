@@ -63,6 +63,15 @@ Host/storage administrators remain trusted and can defeat filesystem guarantees.
 - A verified readback returns `201` with `customerReplyAccepted:true`, message ID
   and `emailDelivery:"not_verified"`. Check the recipient mailbox for delivery.
 
+Send readback requires the exact approved reply text and subject, whether HubSpot
+returns `NOT_TRUNCATED` or `TRUNCATED_TO_MOST_RECENT_REPLY`. The latter removes
+earlier reply history; it does not permit a partial, normalized or approximate
+match of the approved body. Full original content may include quoted history and
+is not substituted for the exact reply-text proof. Generic `TRUNCATED`, missing
+or unknown states, content/routing mismatches and failed final ownership checks
+remain `WRITE_OUTCOME_UNKNOWN`, with the durable reservation retained. A confirmed
+reply also retains its reservation; no automatic resend is permitted.
+
 Reads and sends require one complete contact association, one complete linked
 email thread, and at least one incoming email from that requester. CC/BCC,
 multiple recipients/threads, paginated or oversized histories, mismatched
